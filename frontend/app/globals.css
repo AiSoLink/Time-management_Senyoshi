@@ -1,0 +1,5 @@
+/* Override Next.js devtools portal position (browser preview change) */
+nextjs-portal {
+  left: unset;
+  top: unset;
+}

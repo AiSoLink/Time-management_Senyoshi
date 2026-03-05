@@ -1,0 +1,38 @@
+# Python
+backend/.venv/
+backend/venv/
+backend/__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.so
+.env
+.env.local
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Backend: ジョブ実行で生成される作業ディレクトリ
+backend/work/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+.npm
+.yarn/
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
