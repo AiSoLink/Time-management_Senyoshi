@@ -1163,6 +1163,26 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         "出庫日時": merged_row["出庫日時"],
         "帰庫日時": merged_row["帰庫日時"],
     }
+    # 3時間以上紐づけのドロップダウン表示用：統合元のデジタコ出庫・帰庫の min/max を退避
+    out_digitaco_dts = []
+    in_digitaco_dts = []
+    for rs in run_states:
+        mh = rs.get("merged_header") or {}
+        o = mh.get("_digitaco_出庫日時") or mh.get("出庫日時")
+        i = mh.get("_digitaco_帰庫日時") or mh.get("帰庫日時")
+        if o:
+            t = _row_to_dt(o)
+            if t is not None:
+                out_digitaco_dts.append(t)
+        if i:
+            t = _row_to_dt(i)
+            if t is not None:
+                in_digitaco_dts.append(t)
+    if out_digitaco_dts:
+        merged_header["_digitaco_出庫日時"] = format_dt_for_excel(min(out_digitaco_dts))
+    if in_digitaco_dts:
+        merged_header["_digitaco_帰庫日時"] = format_dt_for_excel(max(in_digitaco_dts))
+
     all_details: List[Dict[str, Any]] = []
     for rs in run_states:
         all_details.extend(rs.get("merged_details") or [])
@@ -1324,14 +1344,18 @@ def run_pipeline(
             # details 結合
             merged_details = _merge_detail_rows([p["details"] for p in parts])
 
-            # 手入力用に run_state を蓄積（JSON 化できる形で）。デジタコの出庫・帰庫のみ入れた状態で保存
+            # 手入力用に run_state を蓄積（JSON 化できる形で）。デジタコの出庫・帰庫のみ入れた状態で保存。
+            # アルコール突合で上書きされても、3h以上紐づけ画面でデジタコの出庫・帰庫を表示するため退避用に保存
             def _to_serializable(v: Any) -> Any:
                 if isinstance(v, datetime):
                     return v.strftime("%Y/%m/%d %H:%M")
                 return v
+            mh_serialized = {k: _to_serializable(v) for k, v in merged_header.items()}
+            mh_serialized["_digitaco_出庫日時"] = mh_serialized.get("出庫日時")
+            mh_serialized["_digitaco_帰庫日時"] = mh_serialized.get("帰庫日時")
             run_states.append({
                 "report_id": report_id,
-                "merged_header": {k: _to_serializable(v) for k, v in merged_header.items()},
+                "merged_header": mh_serialized,
                 "merged_details": [{k: _to_serializable(v) for k, v in d.items()} for d in merged_details],
             })
 

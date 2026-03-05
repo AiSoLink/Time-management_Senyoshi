@@ -256,16 +256,25 @@ def get_job(jobId: str):
             if data.get("runDateChoices") is not None:
                 out["runDateChoices"] = data["runDateChoices"]
         if state.status == "link_decision_required":
-            link_runs = data.get("linkRuns") or []
-            if not link_runs and data.get("run_states") and data.get("headers"):
-                preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
-                if preset_path.exists():
-                    link_rows = rows_from_run_states(data["run_states"], data["headers"], preset_path, state.device)
-                    link_runs = [
-                        {"rowIndex": i, "運行ID": r.get("運行ID"), "運行日": r.get("運行日"), "乗務員名": r.get("乗務員名"), "出庫日時": (r.get("出庫日時") or ""), "帰庫日時": (r.get("帰庫日時") or "")}
-                        for i, r in enumerate(link_rows)
-                    ]
-            out["linkRuns"] = link_runs
+            run_states = data.get("run_states") or []
+            if run_states and data.get("headers"):
+                # ドロップダウンは常にデジタコの出庫・帰庫で表示するため、run_states から _digitaco_ 優先で組み立てる（保存済み linkRuns は使わない）
+                link_runs = []
+                for i, rs in enumerate(run_states):
+                    mh = rs.get("merged_header") or {}
+                    out_dt = (mh.get("_digitaco_出庫日時") or mh.get("出庫日時") or "")
+                    in_dt = (mh.get("_digitaco_帰庫日時") or mh.get("帰庫日時") or "")
+                    link_runs.append({
+                        "rowIndex": i,
+                        "運行ID": mh.get("運行ID"),
+                        "運行日": mh.get("運行日"),
+                        "乗務員名": mh.get("乗務員名"),
+                        "出庫日時": out_dt if out_dt is not None else "",
+                        "帰庫日時": in_dt if in_dt is not None else "",
+                    })
+                out["linkRuns"] = link_runs
+            else:
+                out["linkRuns"] = data.get("linkRuns") or []
             out["linkPairs"] = data.get("linkPairs") or []
             if data.get("linkGroups") is not None:
                 out["linkGroups"] = data["linkGroups"]
@@ -552,7 +561,7 @@ def _do_merge_and_excel(
     state.pendingRows = None
     state.artifacts = Artifacts(excel=True, log=True, skipped=True)
     save_state(sp, state)
-    return {"ok": True, "message": "Excel を出力しました。"}
+    return {"ok": True, "status": "succeeded", "message": "Excel を出力しました。"}
 
 
 def _build_codriver_rows(base_rows: List[Dict[str, Any]], codriver_links: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -877,7 +886,7 @@ def complete_manual(jobId: str, body: Dict[str, Any] = Body(...)):
     state.pendingRows = None
     state.artifacts = Artifacts(excel=True, log=True, skipped=True)
     save_state(sp, state)
-    return {"ok": True, "message": "手入力を反映し、Excel を出力しました。"}
+    return {"ok": True, "status": "succeeded", "message": "手入力を反映し、Excel を出力しました。"}
 
 
 def _artifact_path(jobId: str, kind: str) -> Path:

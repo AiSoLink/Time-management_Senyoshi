@@ -27,8 +27,22 @@ const MANUAL_FIELD_KEYS: (keyof ManualEditFields)[] = ["出庫日", "出庫時",
 
 function parseDatePart(s: string | undefined): string {
   if (!s?.trim()) return "";
-  const match = String(s).trim().match(/^(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/);
-  return match ? match[1].replace(/-/g, "/") : "";
+  const match = String(s).trim().match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+  if (!match) return "";
+  const [, y, m, d] = match;
+  return `${y}/${m.padStart(2, "0")}/${d.padStart(2, "0")}`;
+}
+/** 日付文字列を YYYY/MM/DD に正規化（比較・キー用） */
+function normalizeDateKey(s: string | undefined): string {
+  const parsed = parseDatePart(s);
+  return parsed || "";
+}
+/** YYYY/MM/DD を「M月D日」表示用に */
+function formatDateLabel(key: string): string {
+  if (!key) return "";
+  const m = key.match(/^\d{4}\/(\d{1,2})\/(\d{1,2})$/);
+  if (!m) return key;
+  return `${parseInt(m[1], 10)}月${parseInt(m[2], 10)}日`;
 }
 function parseTimePart(s: string | undefined): { h: string; mm: string } {
   if (!s?.trim()) return { h: "", mm: "" };
@@ -149,6 +163,8 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
   /** 同乗者紐づけ: key = `${乗務員ID正規化}_${runIndex}`, value = driverRowIndex */
   const [codriverSelections, setCodriverSelections] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
+  /** 手入力画面: 出庫日で絞り込み（"" = すべて表示、YYYY/MM/DD = その日のみ表示） */
+  const [manualDateFilter, setManualDateFilter] = useState<string>("");
 
   /** 1つ前の画面に戻る（ワークフロー内の前ステップに戻す。merge の前だけブラウザ back） */
   const handleBackToPrevious = async () => {
@@ -446,7 +462,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
   };
 
   const handleManualSubmit = async () => {
-    if (!job?.pendingRows?.length) return;
+    if (submitting || !job?.pendingRows?.length) return;
     if (!allManualFilled && !window.confirm("未入力はありませんか？")) return;
     const pendingRows = job.pendingRows;
     for (const r of pendingRows) {
@@ -475,9 +491,13 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
           帰庫日時: toDatetime(m.帰庫日, m.帰庫時, m.帰庫分),
         };
       });
-      await apiPostJson(`/api/jobs/${jobId}/complete-manual`, { entries });
-      const j = await apiGet<Job>(`/api/jobs/${jobId}`);
-      setJob(j);
+      const res = await apiPostJson<{ ok?: boolean; status?: string; message?: string }>(`/api/jobs/${jobId}/complete-manual`, { entries });
+      if (res?.status === "succeeded" && job) {
+        setJob({ ...job, status: "succeeded", pendingRows: undefined });
+      } else {
+        const j = await apiGet<Job>(`/api/jobs/${jobId}`);
+        setJob(j);
+      }
       setManualEdits({});
     } catch (e) {
       setErr(String(e));
@@ -640,9 +660,10 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
           {job.status === "merge_decision_required" && job.mergeGroups && job.mergeGroups.length > 0 && (
             <div style={{ marginTop: 16, marginBottom: 16 }}>
               <p style={{ marginBottom: 8 }}>
-                デジタコデータが1日に2つ以上あるドライバーリストです。
+                あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。
                 <br />
-                同一乗務員で「帰庫」→次の「出庫」が3時間未満の運行があります。まとめる運行を個別に選択してください。
+                <br />
+                同じ乗務員で「帰庫」→次の「出庫」が3時間未満の運行があります。まとめる運行を個別に選択してください。
               </p>
               <table border={1} cellPadding={8} style={{ borderCollapse: "collapse", tableLayout: "auto", width: "100%", minWidth: 800 }}>
                   <thead>
@@ -772,7 +793,10 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
           {job.status === "link_decision_required" && (
             <div style={{ marginTop: 16, marginBottom: 16 }}>
               <p style={{ marginBottom: 8 }}>
-              同一乗務員で「帰庫」→次の「出庫」が3時間以上空いているが、複数運行データを一つの運行に紐づけたいものはありますか？
+              あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。
+              <br />
+              <br />
+              同じ乗務員で「帰庫」→次の「出庫」が3時間以上空いているが、複数運行データを一つの運行に紐づけたいものはありますか？
               </p>
               <div style={{ marginBottom: 12 }}>
                 <button
@@ -1018,7 +1042,11 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
             </div>
           )}
 
-          {job.status === "manual_input_required" && job.pendingRows && job.pendingRows.length > 0 && (
+          {job.status === "manual_input_required" && job.pendingRows && job.pendingRows.length > 0 && (() => {
+              const pendingRows = job.pendingRows!;
+              const uniqueDateKeys = [...new Set(pendingRows.map((r) => normalizeDateKey(getManualRow(r).出庫日)).filter(Boolean))].sort();
+              const displayRows = manualDateFilter === "" ? pendingRows : pendingRows.filter((r) => normalizeDateKey(getManualRow(r).出庫日) === manualDateFilter);
+              return (
             <div style={{ marginTop: 16, marginBottom: 16, position: "relative" }}>
               <div style={{ position: "absolute", top: -100, right: -5, maxWidth: 400, fontSize: 14, background: "#fff8e1", border: "1px solid #ffb300", padding: "12px 20px", borderRadius: 6, lineHeight: 1.6, boxShadow: "0 3px 8px rgba(0,0,0,0.2)" }}>
                 <div style={{ fontWeight: "bold", marginBottom: 4 }}>コメント</div>
@@ -1029,6 +1057,22 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
               <br />
               出庫・帰庫の日時を手入力してください。
               </p>
+              <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 14, fontWeight: 500 }}>出庫日で絞り込み:</span>
+                <select
+                  value={manualDateFilter}
+                  onChange={(e) => setManualDateFilter(e.target.value)}
+                  style={{ padding: "4px 8px", fontSize: 14, minWidth: 140 }}
+                >
+                  <option value="">すべて表示</option>
+                  {uniqueDateKeys.map((key) => (
+                    <option key={key} value={key}>{formatDateLabel(key)}</option>
+                  ))}
+                </select>
+                {manualDateFilter !== "" && (
+                  <span style={{ fontSize: 13, color: "#666" }}>（{displayRows.length}件表示 / 全{pendingRows.length}件）</span>
+                )}
+              </div>
               <table border={1} cellPadding={6} style={{ borderCollapse: "collapse", width: "100%", maxWidth: 1000 }}>
                 <thead>
                   <tr>
@@ -1040,7 +1084,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                   </tr>
                 </thead>
                 <tbody>
-                  {job.pendingRows.map((r) => {
+                  {displayRows.map((r) => {
                     const m = getManualRow(r);
                     return (
                       <tr key={r.rowIndex}>
@@ -1136,7 +1180,8 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                 </button>
               </div>
             </div>
-          )}
+              );
+            })()}
 
           {job.status === "succeeded" && (
             <div style={{ display: "flex", gap: 10 }}>
