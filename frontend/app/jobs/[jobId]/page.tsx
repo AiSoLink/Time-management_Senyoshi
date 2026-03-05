@@ -464,8 +464,6 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
 
   const handleManualSubmit = async () => {
     if (submitting || manualSubmitInProgressRef.current || !job?.pendingRows?.length) return;
-    if (!allManualFilled && !window.confirm("未入力はありませんか？")) return;
-    // OK押下直後に送信中にし、ダイアログ→OKの挙動が2回起きないようにする（refで同期的にガード）
     manualSubmitInProgressRef.current = true;
     setSubmitting(true);
     setErr("");
@@ -496,14 +494,27 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
           帰庫日時: toDatetime(m.帰庫日, m.帰庫時, m.帰庫分),
         };
       });
-      const res = await apiPostJson<{ ok?: boolean; status?: string; message?: string }>(`/api/jobs/${jobId}/complete-manual`, { entries });
-      if (res?.status === "succeeded") {
-        setJob((prev) => (prev ? { ...prev, status: "succeeded", pendingRows: undefined } : prev));
-      } else {
-        const j = await apiGet<Job>(`/api/jobs/${jobId}`);
-        setJob(j);
+      await apiPostJson<{ ok?: boolean; status?: string; message?: string }>(`/api/jobs/${jobId}/complete-manual`, { entries });
+      // ファイルが書き込まれるまで短く待ってから fetch で取得し、Blob でダウンロード（リンク直接だと準備完了前に GET されることがあるため）
+      const excelUrl = dl("excel");
+      let res = await fetch(excelUrl, { cache: "no-store" });
+      if (!res.ok) {
+        await new Promise((r) => setTimeout(r, 400));
+        res = await fetch(excelUrl, { cache: "no-store" });
       }
-      setManualEdits({});
+      if (!res.ok) throw new Error("Excel の準備ができていません。しばらく待ってから再度「ダウンロード」を押してください。");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "output.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      const j = await apiGet<Job>(`/api/jobs/${jobId}`);
+      setJob(j);
+      if (j.status === "succeeded") setManualEdits({});
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -659,10 +670,6 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
       {!job && <p>読み込み中...</p>}
       {job && (
         <div>
-          {(job.status === "succeeded" || job.status === "failed") && (
-            <p>状態：<b>{job.status}</b> / {job.processedPdfs}/{job.totalPdfs}</p>
-          )}
-
           {job.status === "merge_decision_required" && job.mergeGroups && job.mergeGroups.length > 0 && (
             <div style={{ marginTop: 16, marginBottom: 16 }}>
               <p style={{ marginBottom: 8 }}>
@@ -1180,9 +1187,9 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                   onClick={handleManualSubmit}
                   disabled={submitting}
                   style={{ padding: "8px 16px", border: "1px solid #1976d2", background: "#e3f2fd", color: "#1565c0", fontWeight: 600 }}
-                  title={allManualFilled ? "" : "未入力の行がある場合は確認が表示されます"}
+                  title="押すとExcelを出力し、ダウンロードできます"
                 >
-                  {submitting ? "計算・出力中..." : "入力完了・計算実行"}
+                  {submitting ? "ダウンロード中..." : "ダウンロード"}
                 </button>
               </div>
             </div>
@@ -1190,25 +1197,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
             })()}
 
           {job.status === "succeeded" && (
-            <div>
-              <a
-                href={dl("excel")}
-                download="output.xlsx"
-                style={{
-                  pointerEvents: job.artifacts?.excel ? "auto" : "none",
-                  opacity: job.artifacts?.excel ? 1 : 0.5,
-                  padding: "8px 16px",
-                  border: "1px solid #1976d2",
-                  background: "#e3f2fd",
-                  color: "#1565c0",
-                  fontWeight: 600,
-                  textDecoration: "none",
-                  borderRadius: 4,
-                }}
-              >
-                ダウンロード
-              </a>
-            </div>
+            <p style={{ marginTop: 8 }}>Excelをダウンロードしました。</p>
           )}
         </div>
       )}

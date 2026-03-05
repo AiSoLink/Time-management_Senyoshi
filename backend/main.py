@@ -532,6 +532,7 @@ def _do_merge_and_excel(
         for i, r in enumerate(new_rows)
         if not r.get("出庫日時") or not r.get("帰庫日時")
     ]
+    # 手入力画面の「入力完了・計算実行」から来た場合は未入力行があっても再手入力に戻さず、そのまま Excel 出力して succeeded にする
     if missing and not from_complete_manual:
         inp_dir = job_input_dir(jobId)
         alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
