@@ -163,6 +163,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
   /** 同乗者紐づけ: key = `${乗務員ID正規化}_${runIndex}`, value = driverRowIndex */
   const [codriverSelections, setCodriverSelections] = useState<Record<string, number>>({});
   const [submitting, setSubmitting] = useState(false);
+  const manualSubmitInProgressRef = useRef(false);
   /** 手入力画面: 出庫日で絞り込み（"" = すべて表示、YYYY/MM/DD = その日のみ表示） */
   const [manualDateFilter, setManualDateFilter] = useState<string>("");
 
@@ -462,8 +463,12 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
   };
 
   const handleManualSubmit = async () => {
-    if (submitting || !job?.pendingRows?.length) return;
+    if (submitting || manualSubmitInProgressRef.current || !job?.pendingRows?.length) return;
     if (!allManualFilled && !window.confirm("未入力はありませんか？")) return;
+    // OK押下直後に送信中にし、ダイアログ→OKの挙動が2回起きないようにする（refで同期的にガード）
+    manualSubmitInProgressRef.current = true;
+    setSubmitting(true);
+    setErr("");
     const pendingRows = job.pendingRows;
     for (const r of pendingRows) {
       const m = getManualRow(r);
@@ -477,11 +482,11 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
       if (isEmpty) continue;
       if (!validateTimeBlock(r.rowIndex, "出庫", m.出庫時, m.出庫分) || !validateTimeBlock(r.rowIndex, "帰庫", m.帰庫時, m.帰庫分)) {
         setErr("正確な時刻を入力してください");
+        manualSubmitInProgressRef.current = false;
+        setSubmitting(false);
         return;
       }
     }
-    setErr("");
-    setSubmitting(true);
     try {
       const entries = pendingRows.map((r) => {
         const m = getManualRow(r);
@@ -492,8 +497,8 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
         };
       });
       const res = await apiPostJson<{ ok?: boolean; status?: string; message?: string }>(`/api/jobs/${jobId}/complete-manual`, { entries });
-      if (res?.status === "succeeded" && job) {
-        setJob({ ...job, status: "succeeded", pendingRows: undefined });
+      if (res?.status === "succeeded") {
+        setJob((prev) => (prev ? { ...prev, status: "succeeded", pendingRows: undefined } : prev));
       } else {
         const j = await apiGet<Job>(`/api/jobs/${jobId}`);
         setJob(j);
@@ -502,6 +507,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
     } catch (e) {
       setErr(String(e));
     } finally {
+      manualSubmitInProgressRef.current = false;
       setSubmitting(false);
     }
   };
@@ -1184,9 +1190,24 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
             })()}
 
           {job.status === "succeeded" && (
-            <div style={{ display: "flex", gap: 10 }}>
-              <a href={dl("excel")} style={{ pointerEvents: job.artifacts.excel ? "auto" : "none", opacity: job.artifacts.excel ? 1 : 0.5 }}>Excel</a>
-              <a href={dl("log")} style={{ pointerEvents: job.artifacts.log ? "auto" : "none", opacity: job.artifacts.log ? 1 : 0.5 }}>Log</a>
+            <div>
+              <a
+                href={dl("excel")}
+                download="output.xlsx"
+                style={{
+                  pointerEvents: job.artifacts?.excel ? "auto" : "none",
+                  opacity: job.artifacts?.excel ? 1 : 0.5,
+                  padding: "8px 16px",
+                  border: "1px solid #1976d2",
+                  background: "#e3f2fd",
+                  color: "#1565c0",
+                  fontWeight: 600,
+                  textDecoration: "none",
+                  borderRadius: 4,
+                }}
+              >
+                ダウンロード
+              </a>
             </div>
           )}
         </div>
