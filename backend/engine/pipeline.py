@@ -1229,7 +1229,9 @@ def run_pipeline(
     job_output_dir: Path,
     job_input_dir: Optional[Path] = None,  # アルコール突合用（taimen / alcohol サブディレクトリ）
 ) -> PipelineResult:
-    headers: List[str] = json.loads((Path(__file__).parent / "excel_headers.json").read_text(encoding="utf-8"))
+    from storage.paths import EXCEL_HEADERS_JSON_PATH
+    _headers_path = EXCEL_HEADERS_JSON_PATH if EXCEL_HEADERS_JSON_PATH is not None else (Path(__file__).parent / "excel_headers.json")
+    headers: List[str] = json.loads(_headers_path.read_text(encoding="utf-8"))
     preset = _load_preset(preset_path)
 
     job_output_dir.mkdir(parents=True, exist_ok=True)

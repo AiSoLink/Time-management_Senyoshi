@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
@@ -12,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from storage.paths import ensure_dirs, COMPANIES_DIR, safe_name, job_input_dir, job_output_dir, job_state_path
+from storage.paths import ensure_dirs, APP_ROOT, COMPANIES_DIR, safe_name, job_input_dir, job_output_dir, job_state_path
 from storage.state import JobState, Artifacts, save_state, load_state
 from job_runner import run_job
 from engine.pipeline import complete_manual_input, apply_merge_decision, apply_alcohol_to_run_states, rows_from_run_states, _merge_runs, _write_excel as write_excel
@@ -943,6 +944,30 @@ def download(jobId: str, kind: str):
 
 
 # 静的フロント（HTML/CSS/JS）をルートで配信。API は /api/* で先に定義済みのため優先される。
-_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+# exe 化時は exe 横の _app/web を参照（複数候補を試す）。
+_candidates: list = []
+if getattr(sys, "frozen", False):
+    _candidates = [
+        Path(sys.executable).resolve().parent / "_app" / "web",
+        Path(sys.argv[0]).resolve().parent / "_app" / "web",
+        Path.cwd().resolve() / "_app" / "web",
+    ]
+    _WEB_DIR = next((p for p in _candidates if p.is_dir()), _candidates[0])
+else:
+    _WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 if _WEB_DIR.is_dir():
     app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="static")
+else:
+    # exe 時のみ: 静的が無い場合にデバッグ用エンドポイントを追加
+    _tried = _candidates
+    @app.get("/api/debug/web-path")
+    def _debug_web_path():
+        return {
+            "frozen": getattr(sys, "frozen", False),
+            "sys_executable": str(getattr(sys, "executable", "")),
+            "cwd": str(Path.cwd().resolve()),
+            "tried": [str(p) for p in _tried],
+            "web_dir": str(_WEB_DIR),
+            "exists": _WEB_DIR.exists(),
+            "is_dir": _WEB_DIR.is_dir(),
+        }

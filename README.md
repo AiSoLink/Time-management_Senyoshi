@@ -98,6 +98,9 @@ cd frontend
 ├── README.md
 ├── backend/
 │   ├── main.py              # FastAPIアプリ・API・静的配信
+│   ├── run_app.py            # exe 用エントリ（ターミナル非表示・ブラウザ起動）
+│   ├── build_exe.ps1         # exe ビルドスクリプト（onedir）
+│   ├── TimeManagement.spec   # PyInstaller 用 spec
 │   ├── requirements.txt
 │   ├── run_backend.ps1
 │   ├── job_runner.py         # ジョブ実行
@@ -119,6 +122,74 @@ cd frontend
 │   └── app.js
 └── frontend/                 # 旧Next.jsフロント（任意）
 ```
+
+---
+
+## exe 化（顧客配布用）
+
+PyInstaller の **onedir** で exe を組み、ターミナルを表示せずブラウザだけ開く配布用フォルダを作成できます。
+
+### 配布フォルダの形
+
+ビルド後の `backend\dist\TimeManagement\` をそのまま顧客に渡します。
+
+```
+dist/TimeManagement/
+├── TimeManagement.exe    # これをダブルクリックで起動
+├── 起動方法.txt
+├── _app                  # hidden（companies / engine / web）
+│   ├── companies/
+│   ├── engine/
+│   └── web/
+├── _work                 # hidden（ジョブ入出力）
+└── （PyInstaller のランタイムファイル）
+```
+
+### 初回ビルド手順
+
+1. 仮想環境を用意し、依存を入れる。
+
+   ```powershell
+   cd backend
+   python -m venv .venv
+   .\.venv\Scripts\Activate.ps1
+   pip install -r requirements.txt
+   pip install pyinstaller
+   ```
+
+2. ビルドスクリプトを実行する（スクリプト内で仮想環境を有効化してから PyInstaller を実行します）。
+
+   ```powershell
+   .\build_exe.ps1
+   ```
+
+3. 出力は **`backend\dist\TimeManagement\`** です。このフォルダ一式を配布します。
+
+### コードを変えたあとに exe をやり直すとき
+
+中身のコード（`main.py`・`web/`・`engine/` など）を変更したら、exe を**作り直す**必要があります。
+
+1. **古いビルド結果を消す**（任意だが推奨）
+
+   ```powershell
+   cd backend
+   Remove-Item -Recurse -Force .\dist, .\build -ErrorAction SilentlyContinue
+   ```
+
+2. **再ビルド**
+
+   ```powershell
+   .\build_exe.ps1
+   ```
+
+3. 新しい **`dist\TimeManagement\`** を配布用として使います。
+
+※ `build_exe.ps1` が `_app` に `companies`・`web`・`engine` をコピーするため、ソースを変えた内容は再ビルドで exe 配布物に反映されます。
+
+### 起動・トラブル時
+
+- **起動**: `TimeManagement.exe` をダブルクリック。しばらくするとブラウザで http://127.0.0.1:8000 が開きます。
+- **接続できないとき**: exe と同じフォルダに `TimeManagement_error.log` ができていないか確認してください。
 
 ---
 
