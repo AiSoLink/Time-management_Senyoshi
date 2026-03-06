@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>実行 - 時間管理システム</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>時間管理システム</h1>
+    <h2>3) 実行</h2>
+    <p>会社：<b id="companyLabel"></b> / 機種：<b id="deviceLabel"></b></p>
+    <p id="err" class="err" style="display:none;"></p>
+
+    <div id="uploadSection">
+      <div style="display:flex; flex-wrap:wrap; gap:24px; margin-bottom:16px;">
+        <div style="min-width:160px;">
+          <div style="font-weight:600; margin-bottom:4px;" id="digitacoLabel">みまもり / テレコム（デジタコ）</div>
+          <input type="file" accept="application/pdf" multiple id="pdfs" />
+          <span id="pdfCount" style="margin-left:8px; font-size:14px;"></span>
+        </div>
+        <div style="min-width:160px;">
+          <div style="font-weight:600; margin-bottom:4px;">対面</div>
+          <input type="file" multiple id="taimen" />
+          <span id="taimenCount" style="margin-left:8px; font-size:14px;"></span>
+        </div>
+        <div style="min-width:160px;">
+          <div style="font-weight:600; margin-bottom:4px;">アルキラーNEX</div>
+          <input type="file" multiple id="alcohol" />
+          <span id="alcoholCount" style="margin-left:8px; font-size:14px;"></span>
+        </div>
+      </div>
+      <div class="section-actions">
+        <button type="button" id="btnStart" class="btn-primary">実行</button>
+      </div>
+    </div>
+
+    <div id="progressSection" style="display:none; margin-top:16px; max-width:480px;">
+      <p id="progressText" style="margin-bottom:8px; font-weight:600;">処理中…</p>
+      <div class="progress-bar">
+        <div class="progress-bar-inner" id="progressBar" style="width:0%;"></div>
+      </div>
+      <p id="progressDetail" style="margin-top:6px; font-size:14px; color:#555;"></p>
+    </div>
+
+    <div id="doneSection" style="display:none; padding:12px 0;">
+      <p style="margin-bottom:12px; font-weight:600;">処理が完了しました。</p>
+      <div class="section-actions">
+        <button type="button" id="btnToResult" class="btn-primary">結果を確認する →</button>
+        <button type="button" id="btnAgain" class="btn-secondary">別のファイルで再実行</button>
+      </div>
+    </div>
+
+    <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
+  </div>
+  <script src="app.js"></script>
+  <script>
+    var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
+    var params = new URLSearchParams(location.search);
+    var company = params.get("company") || "";
+    var device = params.get("device") || "";
+    var deviceLabel = device ? (DEVICE_DISPLAY[device] || device) : "";
+
+    document.getElementById("companyLabel").textContent = company;
+    document.getElementById("deviceLabel").textContent = deviceLabel || "—";
+    document.getElementById("digitacoLabel").textContent = deviceLabel || "みまもり / テレコム（デジタコ）";
+
+    var errEl = document.getElementById("err");
+    var uploadSection = document.getElementById("uploadSection");
+    var progressSection = document.getElementById("progressSection");
+    var doneSection = document.getElementById("doneSection");
+    var pdfInput = document.getElementById("pdfs");
+    var taimenInput = document.getElementById("taimen");
+    var alcoholInput = document.getElementById("alcohol");
+    var jobId = null;
+    var pollTimer = null;
+
+    function showErr(msg) {
+      errEl.textContent = msg || "";
+      errEl.style.display = msg ? "block" : "none";
+    }
+
+    function updateCounts() {
+      document.getElementById("pdfCount").textContent = pdfInput.files.length ? pdfInput.files.length + "件" : "";
+      document.getElementById("taimenCount").textContent = taimenInput.files.length ? taimenInput.files.length + "件" : "";
+      document.getElementById("alcoholCount").textContent = alcoholInput.files.length ? alcoholInput.files.length + "件" : "";
+      document.getElementById("btnStart").disabled = pdfInput.files.length === 0;
+    }
+    pdfInput.addEventListener("change", updateCounts);
+    taimenInput.addEventListener("change", updateCounts);
+    alcoholInput.addEventListener("change", updateCounts);
+    updateCounts();
+
+    document.getElementById("btnStart").addEventListener("click", function () {
+      if (pdfInput.files.length === 0) return;
+      showErr("");
+      var fd = new FormData();
+      fd.append("company", company);
+      fd.append("device", device);
+      for (var i = 0; i < pdfInput.files.length; i++) fd.append("pdfs", pdfInput.files[i]);
+      for (var i = 0; i < taimenInput.files.length; i++) fd.append("taimen", taimenInput.files[i]);
+      for (var i = 0; i < alcoholInput.files.length; i++) fd.append("alcohol", alcoholInput.files[i]);
+      document.getElementById("btnStart").disabled = true;
+      document.getElementById("btnStart").textContent = "送信中...";
+      fetch(API_BASE + "/api/jobs", { method: "POST", body: fd })
+        .then(function (res) {
+          if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
+          return res.json();
+        })
+        .then(function (data) {
+          jobId = data.jobId;
+          uploadSection.style.display = "none";
+          progressSection.style.display = "block";
+          document.getElementById("btnStart").disabled = false;
+          document.getElementById("btnStart").textContent = "実行";
+          poll();
+        })
+        .catch(function (e) {
+          showErr(String(e));
+          document.getElementById("btnStart").disabled = false;
+          document.getElementById("btnStart").textContent = "実行";
+        });
+    });
+
+    function poll() {
+      if (!jobId) return;
+      apiGet("/api/jobs/" + jobId).then(function (j) {
+        var pct = j.totalPdfs ? Math.round((100 * j.processedPdfs) / j.totalPdfs) : 0;
+        document.getElementById("progressBar").style.width = pct + "%";
+        document.getElementById("progressDetail").textContent = j.processedPdfs + " / " + j.totalPdfs + " PDF 処理済み";
+        if (j.status === "queued" || j.status === "running") {
+          pollTimer = setTimeout(poll, 1000);
+        } else {
+          progressSection.style.display = "none";
+          doneSection.style.display = "block";
+        }
+      }).catch(function (e) { showErr(String(e)); });
+    }
+
+    document.getElementById("btnToResult").addEventListener("click", function () {
+      location.href = "job.html?id=" + encodeURIComponent(jobId);
+    });
+    document.getElementById("btnAgain").addEventListener("click", function () {
+      jobId = null;
+      if (pollTimer) clearTimeout(pollTimer);
+      doneSection.style.display = "none";
+      uploadSection.style.display = "block";
+      /* アップロード済みのファイル選択はそのまま残す（再選択不要） */
+      updateCounts();
+    });
+  </script>
+</body>
+</html>

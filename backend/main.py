@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from storage.paths import ensure_dirs, COMPANIES_DIR, safe_name, job_input_dir, job_output_dir, job_state_path
 from storage.state import JobState, Artifacts, save_state, load_state
@@ -27,6 +28,49 @@ def _run_date_from_row(r: Dict[str, Any]) -> Any:
     s = str(r.get("出庫日時") or r.get("帰庫日時") or "").strip()
     m = re.match(r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})", s)
     return m.group(1).replace("-", "/") if m else None
+
+
+def _normalize_run_id(rid: str) -> str:
+    """テレコム・みまもりでは run_states に 'ID-xxx' が入るが rows_from_run_states では 'xxx' になる。照合用に正規化する。"""
+    s = str(rid or "").strip()
+    if s.startswith("ID-"):
+        return s[3:]
+    return s
+
+
+def _link_runs_after_merge(
+    run_states: List[Dict[str, Any]],
+    headers: List[str],
+    merge_groups: List[Dict[str, Any]],
+    merge_sets: Optional[List[List[List[int]]]],
+    run_date_choices: List[Any],
+    preset_path: Path,
+    device: str,
+) -> List[Dict[str, Any]]:
+    """3時間未満マージ適用後の運行だけを返す。3時間以上画面の linkRuns 用（マージで消えた運行は出さない）。"""
+    if not run_states or not headers or not preset_path.exists():
+        return []
+    if merge_sets is None:
+        link_rows = rows_from_run_states(run_states, headers, preset_path, device)
+        return [
+            {"rowIndex": i, "運行ID": r.get("運行ID"), "運行日": r.get("運行日"), "乗務員名": r.get("乗務員名"), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
+            for i, r in enumerate(link_rows)
+        ]
+    _, new_rows = apply_merge_decision(
+        run_states, headers, merge_groups, [], preset_path, device,
+        run_date_choices, merge_sets=merge_sets,
+    )
+    return [
+        {
+            "rowIndex": i,
+            "運行ID": r.get("運行ID"),
+            "運行日": r.get("運行日"),
+            "乗務員名": r.get("乗務員名"),
+            "出庫日時": r.get("出庫日時") or "",
+            "帰庫日時": r.get("帰庫日時") or "",
+        }
+        for i, r in enumerate(new_rows)
+    ]
 
 
 def _apply_entries_to_run_states(
@@ -257,21 +301,16 @@ def get_job(jobId: str):
                 out["runDateChoices"] = data["runDateChoices"]
         if state.status == "link_decision_required":
             run_states = data.get("run_states") or []
-            if run_states and data.get("headers"):
-                # ドロップダウンは常にデジタコの出庫・帰庫で表示するため、run_states から _digitaco_ 優先で組み立てる（保存済み linkRuns は使わない）
-                link_runs = []
-                for i, rs in enumerate(run_states):
-                    mh = rs.get("merged_header") or {}
-                    out_dt = (mh.get("_digitaco_出庫日時") or mh.get("出庫日時") or "")
-                    in_dt = (mh.get("_digitaco_帰庫日時") or mh.get("帰庫日時") or "")
-                    link_runs.append({
-                        "rowIndex": i,
-                        "運行ID": mh.get("運行ID"),
-                        "運行日": mh.get("運行日"),
-                        "乗務員名": mh.get("乗務員名"),
-                        "出庫日時": out_dt if out_dt is not None else "",
-                        "帰庫日時": in_dt if in_dt is not None else "",
-                    })
+            headers = data.get("headers") or []
+            merge_groups = data.get("mergeGroups") or []
+            merge_sets = data.get("mergeSets")
+            run_date_choices = data.get("runDateChoices") or []
+            preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
+            if run_states and headers:
+                # 3時間未満マージ適用後の運行だけ表示（マージで消えた運行は出さない＝ここで選んでもエラーにしない）
+                link_runs = _link_runs_after_merge(
+                    run_states, headers, merge_groups, merge_sets, run_date_choices, preset_path, state.device
+                )
                 out["linkRuns"] = link_runs
             else:
                 out["linkRuns"] = data.get("linkRuns") or []
@@ -327,19 +366,10 @@ def complete_merge(jobId: str, body: Dict[str, Any] = Body(...)):
                 merge_sets.append([[i] for i in indices])
     if len(run_date_choices) < len(merge_groups):
         run_date_choices = run_date_choices + [0] * (len(merge_groups) - len(run_date_choices))
-    # ②では合算しない。選択だけ保存し、②-2（link）画面へ
-    link_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
-    link_runs = [
-        {
-            "rowIndex": i,
-            "運行ID": r.get("運行ID"),
-            "運行日": r.get("運行日"),
-            "乗務員名": r.get("乗務員名"),
-            "出庫日時": r.get("出庫日時") or "",
-            "帰庫日時": r.get("帰庫日時") or "",
-        }
-        for i, r in enumerate(link_rows)
-    ]
+    # ②では合算しない。選択だけ保存し、②-2（link）画面へ。3時間以上画面にはマージ後の運行だけ出す（ここで消えた運行を選ばせない）
+    link_runs = _link_runs_after_merge(
+        run_states, headers, merge_groups, merge_sets, run_date_choices, preset_path, state.device
+    )
     manual_data: Dict[str, Any] = {
         "run_states": run_states,
         "headers": headers,
@@ -507,8 +537,9 @@ def _do_merge_and_excel(
             continue
         indices = []
         for rid in run_ids:
-            if rid in run_id_to_index:
-                indices.append(run_id_to_index[rid])
+            rid_norm = _normalize_run_id(rid)
+            if rid_norm in run_id_to_index:
+                indices.append(run_id_to_index[rid_norm])
         indices = sorted(set(indices))
         if len(indices) < 2:
             continue
@@ -684,7 +715,7 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
             if len(run_ids) < 2:
                 raise HTTPException(status_code=400, detail="各グループは2本以上の運行を指定してください。")
             for rid in run_ids:
-                if rid not in run_id_to_index:
+                if _normalize_run_id(rid) not in run_id_to_index:
                     raise HTTPException(status_code=400, detail=f"無効な運行IDです: {rid}")
         pairs = []
     else:
@@ -692,7 +723,8 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
         for pair in pairs:
             id1 = str(pair.get("運行ID1") or "").strip()
             id2 = str(pair.get("運行ID2") or "").strip()
-            if id1 not in run_id_to_index or id2 not in run_id_to_index or id1 == id2:
+            n1, n2 = _normalize_run_id(id1), _normalize_run_id(id2)
+            if n1 not in run_id_to_index or n2 not in run_id_to_index or n1 == n2:
                 raise HTTPException(status_code=400, detail=f"無効なペアです: 運行ID {id1} と {id2}")
     inp_dir = job_input_dir(jobId)
     alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
@@ -908,3 +940,9 @@ def download(jobId: str, kind: str):
         "log": "text/csv; charset=utf-8",
     }[kind]
     return FileResponse(path, media_type=media, filename=path.name)
+
+
+# 静的フロント（HTML/CSS/JS）をルートで配信。API は /api/* で先に定義済みのため優先される。
+_WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+if _WEB_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(_WEB_DIR), html=True), name="static")

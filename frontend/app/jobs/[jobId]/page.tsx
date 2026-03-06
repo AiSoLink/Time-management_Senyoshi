@@ -1192,7 +1192,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                   {submitting ? "ダウンロード中..." : "ダウンロード"}
                 </button>
               </div>
-            </div>
+          </div>
               );
             })()}
 

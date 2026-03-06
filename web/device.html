@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>機種選択 - 時間管理システム</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>時間管理システム</h1>
+    <h2>2) 機種</h2>
+    <p>会社：<b id="companyName">—</b></p>
+    <p id="err" class="err" style="display:none;"></p>
+    <div id="devices" style="display:flex; gap:10px;"></div>
+    <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
+  </div>
+  <script src="app.js"></script>
+  <script>
+    var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
+    var params = new URLSearchParams(location.search);
+    var company = params.get("company") || "";
+    document.getElementById("companyName").textContent = company || "—";
+
+    var errEl = document.getElementById("err");
+    var devicesEl = document.getElementById("devices");
+
+    function showErr(msg) {
+      errEl.textContent = msg || "";
+      errEl.style.display = msg ? "block" : "none";
+    }
+
+    if (!company) {
+      showErr("会社が指定されていません");
+    } else {
+      apiGet("/api/companies/" + encodeURIComponent(company) + "/devices")
+        .then(function (data) {
+          devicesEl.innerHTML = "";
+          (data.devices || []).forEach(function (d) {
+            var a = document.createElement("a");
+            a.textContent = DEVICE_DISPLAY[d.name] || d.name;
+            a.style.padding = "10px 12px";
+            a.style.border = "1px solid #444";
+            a.style.borderRadius = "8px";
+            a.style.textDecoration = "none";
+            a.style.color = "inherit";
+            a.style.opacity = d.preset ? "1" : "0.5";
+            a.style.pointerEvents = d.preset ? "auto" : "none";
+            if (d.preset) {
+              a.href = "run.html?company=" + encodeURIComponent(company) + "&device=" + encodeURIComponent(d.name);
+            } else {
+              a.href = "#";
+            }
+            devicesEl.appendChild(a);
+          });
+        })
+        .catch(function (e) { showErr(String(e)); });
+    }
+  </script>
+</body>
+</html>

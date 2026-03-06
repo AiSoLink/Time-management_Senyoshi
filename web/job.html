@@ -1,0 +1,1206 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>結果 - 時間管理システム</title>
+  <link rel="stylesheet" href="style.css" />
+  <style>
+    .job-table { border-collapse: collapse; width: 100%; min-width: 800px; }
+    .job-table th, .job-table td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; }
+    .job-table th { background: #f5f5f5; }
+    .job-table .border-heavy { border-width: 2px; border-color: #000; }
+    .merge-check { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+    .link-group-box { border: 1px solid #eee; padding: 10px; margin-bottom: 10px; border-radius: 6px; }
+    .link-add-run-wrap { position: relative; display: inline-block; }
+    .link-add-run-trigger { min-width: 200px; font-size: 13px; padding: 6px 10px; text-align: left; cursor: pointer; border: 1px solid #ccc; background: #fff; border-radius: 4px; }
+    .link-add-run-panel { display: none; position: absolute; top: 100%; left: 0; margin-top: 2px; min-width: 100%; max-height: 300px; border: 1px solid #ccc; border-radius: 4px; background: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 100; flex-direction: column; }
+    .link-add-run-panel.is-open { display: flex; }
+    .link-add-opt { cursor: pointer; }
+    .link-add-opt[data-driver-bg="0"] { background: #fff; }
+    .link-add-opt[data-driver-bg="1"] { background: #e8e8e8; }
+    .link-add-run-search-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid #e0e0e0; flex-shrink: 0; background: #fafafa; }
+    .link-add-run-search { flex: 1; padding: 4px 8px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; }
+    .link-add-run-search-clear { width: 24px; height: 24px; padding: 0; border: none; background: #9e9e9e; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; line-height: 1; flex-shrink: 0; }
+    .link-add-run-search-clear:hover { background: #757575; }
+    .link-add-run-multi-add { padding: 4px 8px; font-size: 12px; white-space: nowrap; cursor: pointer; border: 1px solid #2e7d32; background: #e8f5e9; color: #1b5e20; border-radius: 4px; }
+    .link-add-run-multi-add:hover { background: #c8e6c9; }
+    .link-add-run-opts { max-height: 240px; overflow-y: auto; }
+    .link-add-opt-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+    .link-add-opt-cb { flex-shrink: 0; cursor: pointer; }
+    /* 3時間以上画面：段階が分かるレイアウト（共通部分は変更しない） */
+    .link-step-block { margin-bottom: 24px; text-align: left; }
+    .link-step-block h3.link-step-title { margin: 0 0 10px; font-size: 15px; color: #333; }
+    .link-step-desc { max-width: 720px; line-height: 1.6; margin-bottom: 14px; color: #333; }
+    .link-step-choice { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; max-width: 480px; margin-bottom: 8px; }
+    .link-step-choice p { margin: 0 0 12px; font-size: 14px; color: #555; }
+    .link-step-choice-btns { display: flex; gap: 12px; flex-wrap: wrap; }
+    .link-step-choice-btns .btn-secondary { min-width: 140px; }
+    .link-step-groups { border: 1px solid #dee2e6; border-radius: 8px; padding: 16px; background: #fff; max-width: 900px; margin-bottom: 8px; }
+    .link-step-groups h3 { margin: 0 0 12px; font-size: 15px; color: #333; }
+    .link-step-group-actions { margin-top: 12px; padding-top: 12px; border-top: 1px solid #eee; display: flex; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+    .link-step-nav { margin-top: 28px; padding-top: 20px; border-top: 1px solid #ddd; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .link-step-nav .btn-primary { min-width: 120px; }
+    .codriver-cell { display: flex; align-items: center; gap: 8px; }
+    .job-table .codriver-col { min-width: 280px; max-width: 100%; }
+    .codriver-wrap { position: relative; flex: 1; min-width: 0; }
+    .codriver-trigger { width: 100%; min-width: 0; padding: 6px 10px; font-size: 13px; text-align: left; cursor: pointer; border: 1px solid #ccc; background: #fff; border-radius: 4px; display: flex; flex-direction: column; gap: 2px; }
+.codriver-trigger-line1, .codriver-trigger-line2 { display: block; word-break: break-all; }
+    .codriver-panel { display: none; position: absolute; top: 100%; left: 0; margin-top: 2px; min-width: 100%; max-height: 300px; border: 1px solid #ccc; border-radius: 4px; background: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); z-index: 100; flex-direction: column; }
+    .codriver-panel.is-open { display: flex; }
+    .codriver-search-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-bottom: 1px solid #e0e0e0; flex-shrink: 0; background: #fafafa; }
+    .codriver-search { flex: 1; padding: 4px 8px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; }
+    .codriver-search-clear { width: 24px; height: 24px; padding: 0; border: none; background: #9e9e9e; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; line-height: 1; flex-shrink: 0; }
+    .codriver-search-clear:hover { background: #757575; }
+    .codriver-opts { max-height: 240px; overflow-y: auto; }
+    .codriver-opt { padding: 6px 10px; font-size: 13px; cursor: pointer; white-space: nowrap; border-bottom: 1px solid #f0f0f0; }
+    .codriver-opt[data-driver-bg="0"] { background: #fff; }
+    .codriver-opt[data-driver-bg="1"] { background: #e8e8e8; }
+    .codriver-opt:last-child { border-bottom: none; }
+    .job-table.codriver-tbl tbody tr.codriver-row-bg-0 td { background: #fff; }
+    .job-table.codriver-tbl tbody tr.codriver-row-bg-1 td { background: #e8e8e8; }
+    .job-table.codriver-tbl tbody tr.codriver-row-bg-1 td .codriver-trigger { background: #e8e8e8; }
+    .job-table.manual-tbl tbody tr.manual-row-bg-0 td { background: #fff; }
+    .job-table.manual-tbl tbody tr.manual-row-bg-1 td { background: #e8e8e8; }
+    .job-table.manual-tbl tbody tr.manual-row-bg-1 td input { background: #e8e8e8; }
+    .codriver-opt:hover { background: #e8f5e9; }
+    .codriver-clear { width: 28px; height: 28px; padding: 0; border: 2px solid #424242; background: #616161; color: #fff; border-radius: 4px; cursor: pointer; font-size: 18px; font-weight: bold; line-height: 1; flex-shrink: 0; }
+    .codriver-clear:hover { background: #424242; border-color: #212121; }
+    .manual-input-date { width: 100px; margin-right: 4px; }
+    .manual-input-time { width: 28px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>時間管理システム</h1>
+    <h2>4) 結果 <span id="jobErr" class="err"></span></h2>
+    <div id="loading">読み込み中...</div>
+    <div id="content" style="display:none;"></div>
+    <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
+  </div>
+  <script src="app.js"></script>
+  <script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var jobId = params.get("id") || "";
+  var job = null;
+  var err = "";
+  var mergeSelections = [];
+  var runDateChoiceIndex = {};
+  var linkWantAdd = true;
+  var linkGroups = [];
+  var codriverSelections = {};
+  var manualEdits = {};
+  var manualDateFilter = "";
+  var submitting = false;
+  var pollTimer = null;
+
+  var MANUAL_FIELD_KEYS = ["出庫日", "出庫時", "出庫分", "帰庫日", "帰庫時", "帰庫分"];
+
+  function parseDatePart(s) {
+    if (!s || !String(s).trim()) return "";
+    var m = String(s).trim().match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
+    if (!m) return "";
+    return m[1] + "/" + m[2].padStart(2, "0") + "/" + m[3].padStart(2, "0");
+  }
+  function normalizeDateKey(s) {
+    return parseDatePart(s) || "";
+  }
+  function formatDateLabel(key) {
+    if (!key) return "";
+    var m = key.match(/^\d{4}\/(\d{1,2})\/(\d{1,2})$/);
+    if (!m) return key;
+    return parseInt(m[1], 10) + "月" + parseInt(m[2], 10) + "日";
+  }
+  function parseTimePart(s) {
+    if (!s || !String(s).trim()) return { h: "", mm: "" };
+    var str = String(s).trim();
+    var m = str.match(/(\d{1,2}):(\d{1,2})/);
+    if (m) return { h: String(parseInt(m[1], 10) || ""), mm: m[2].padStart(2, "0") };
+    var m2 = str.match(/\s(\d{1,2})(?::(\d{2}))?$/);
+    if (m2) return { h: String(parseInt(m2[1], 10) || ""), mm: (m2[2] || "0").padStart(2, "0") };
+    return { h: "", mm: "" };
+  }
+  function toDatetime(date, h, mm) {
+    var mm2 = String(mm).padStart(2, "0");
+    if (!date || !date.trim() || !h || !h.trim()) return "";
+    return date.trim() + " " + h.trim() + ":" + mm2;
+  }
+  function getManualRow(r) {
+    var runDate = r.運行日 ? parseDatePart(String(r.運行日)) : "";
+    var outDt = r.出庫日時 || "";
+    var inDt = r.帰庫日時 || "";
+    var outTime = parseTimePart(outDt);
+    var inTime = parseTimePart(inDt);
+    var e = manualEdits[r.rowIndex] || {};
+    return {
+      出庫日: e.出庫日 !== undefined ? e.出庫日 : (runDate || parseDatePart(outDt)),
+      出庫時: e.出庫時 !== undefined ? e.出庫時 : outTime.h,
+      出庫分: e.出庫分 !== undefined ? e.出庫分 : outTime.mm,
+      帰庫日: e.帰庫日 !== undefined ? e.帰庫日 : (runDate || parseDatePart(inDt)),
+      帰庫時: e.帰庫時 !== undefined ? e.帰庫時 : inTime.h,
+      帰庫分: e.帰庫分 !== undefined ? e.帰庫分 : inTime.mm
+    };
+  }
+  function validateTimeBlock(hourValue, minValue) {
+    if (hourValue.trim() !== "") {
+      var h = parseInt(hourValue, 10);
+      if (isNaN(h) || h < 0 || h > 23) return false;
+    }
+    if (minValue.trim() !== "") {
+      var m = parseInt(minValue, 10);
+      if (isNaN(m) || m < 0 || m > 59) return false;
+    }
+    return true;
+  }
+
+  /** 手入力: Enter で移動する枠の順序。日付は変更が少ないため含めず、時・分のみ。行ごと 出庫時→出庫分→帰庫時→帰庫分 */
+  function getManualInputsInOrder() {
+    var content = document.getElementById("content");
+    if (!content) return [];
+    var fieldOrder = ["out-h", "out-m", "in-h", "in-m"];
+    var rows = content.querySelectorAll("tr");
+    var list = [];
+    rows.forEach(function (tr) {
+      fieldOrder.forEach(function (f) {
+        var el = tr.querySelector("input[data-field=\"" + f + "\"]");
+        if (el) list.push(el);
+      });
+    });
+    return list;
+  }
+
+  function focusNextManualInput(current) {
+    var list = getManualInputsInOrder();
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] === current && i + 1 < list.length) {
+        list[i + 1].focus();
+        list[i + 1].select && list[i + 1].select();
+        return;
+      }
+    }
+  }
+
+  /** 時(0-23)・分(0-59)の妥当性。空は未入力で true。 */
+  function isTimeBlockValid(hourValue, minValue) {
+    if ((hourValue || "").trim() !== "") {
+      var h = parseInt(hourValue, 10);
+      if (isNaN(h) || h < 0 || h > 23) return false;
+    }
+    if ((minValue || "").trim() !== "") {
+      var m = parseInt(minValue, 10);
+      if (isNaN(m) || m < 0 || m > 59) return false;
+    }
+    return true;
+  }
+
+  /** Enter 押下時: 時・分が不正なら警告・クリア・フォーカスを h に。正しければ次へ。 */
+  function validateTimeAndFocusNext(inp) {
+    var row = parseInt(inp.getAttribute("data-row"), 10);
+    var field = inp.getAttribute("data-field");
+    var tr = inp.closest("tr");
+    if (!tr) return;
+    var outH = tr.querySelector("input[data-field=out-h]");
+    var outM = tr.querySelector("input[data-field=out-m]");
+    var inH = tr.querySelector("input[data-field=in-h]");
+    var inM = tr.querySelector("input[data-field=in-m]");
+    var invalid = false;
+    var focusTarget = null;
+    if (field === "out-h" || field === "out-m") {
+      if (!isTimeBlockValid(outH ? outH.value : "", outM ? outM.value : "")) {
+        invalid = true;
+        focusTarget = outH;
+        if (outH) { outH.value = ""; manualEdits[row] = manualEdits[row] || {}; manualEdits[row].出庫時 = ""; }
+        if (outM) { outM.value = ""; manualEdits[row] = manualEdits[row] || {}; manualEdits[row].出庫分 = ""; }
+      }
+    } else if (field === "in-h" || field === "in-m") {
+      if (!isTimeBlockValid(inH ? inH.value : "", inM ? inM.value : "")) {
+        invalid = true;
+        focusTarget = inH;
+        if (inH) { inH.value = ""; manualEdits[row] = manualEdits[row] || {}; manualEdits[row].帰庫時 = ""; }
+        if (inM) { inM.value = ""; manualEdits[row] = manualEdits[row] || {}; manualEdits[row].帰庫分 = ""; }
+      }
+    }
+    if (invalid) {
+      setErr("有効な時刻を入力してください");
+      if (focusTarget) { focusTarget.focus(); focusTarget.select && focusTarget.select(); }
+      return;
+    }
+    setErr("");
+    focusNextManualInput(inp);
+  }
+
+  function setErr(msg) {
+    err = msg || "";
+    var el = document.getElementById("jobErr");
+    if (el) el.textContent = err;
+  }
+
+  function fetchJob() {
+    if (!jobId) return Promise.reject(new Error("ジョブIDがありません"));
+    return apiGet("/api/jobs/" + encodeURIComponent(jobId));
+  }
+
+  function showLoadingFailed(msg) {
+    setErr(msg || "ジョブの取得に失敗しました。");
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("content").style.display = "block";
+    document.getElementById("content").innerHTML = "<p class=\"err\">" + (msg || "ジョブの取得に失敗しました。") + "</p>";
+  }
+
+  function poll() {
+    fetchJob().then(function (j) {
+      try {
+        if (!j || typeof j !== "object") {
+          showLoadingFailed("サーバーからの応答が不正です。");
+          return;
+        }
+        job = j;
+        if (j.status === "queued" || j.status === "running") {
+          pollTimer = setTimeout(poll, 1000);
+        }
+      if (j.status === "merge_decision_required" && j.mergeGroups && j.mergeGroups.length && j.mergeSets != null && j.runDateChoices != null) {
+        mergeSelections = j.mergeGroups.map(function (g, gi) {
+          var rowIndices = g.rowIndices || [];
+          var sets = (j.mergeSets || [])[gi] || [];
+          var checked = [];
+          sets.forEach(function (s) {
+            if (s.length >= 2) s.forEach(function (idx) {
+              var ri = rowIndices.indexOf(idx);
+              if (ri >= 0) checked.push(ri);
+            });
+          });
+          return checked.length ? checked : rowIndices.map(function (_, ri) { return ri; });
+        });
+        runDateChoiceIndex = {};
+        (j.runDateChoices || []).forEach(function (v, i) { runDateChoiceIndex[i] = v; });
+      }
+      if (j.status === "link_decision_required") {
+        linkWantAdd = true;
+        if ((j.linkGroups || []).length > 0) {
+          linkGroups = j.linkGroups.slice();
+        } else if ((j.linkPairs || []).length > 0) {
+          linkGroups = j.linkPairs.map(function (p) {
+            return {
+              runIds: [p.運行ID1, p.運行ID2].filter(Boolean),
+              運行日を: p.運行日を === "second" ? 1 : 0
+            };
+          });
+        } else {
+          linkGroups = [];
+        }
+      }
+      if (j.status === "codriver_link_required" && (j.codriverLinks || []).length > 0 && (j.alcoholOnlyCrew || []).length > 0) {
+        var sel = {};
+        j.alcoholOnlyCrew.forEach(function (c) {
+          (c.runs || []).forEach(function (run, runIndex) {
+            var key = (c.乗務員ID正規化 || "") + "_" + runIndex;
+            var link = j.codriverLinks.find(function (l) {
+              return (String(l.乗務員ID || "").trim().replace(/^0+/, "") || "0") === (c.乗務員ID正規化 || "") &&
+                (l.出庫日時 || "") === (run.出庫日時 || "") && (l.帰庫日時 || "") === (run.帰庫日時 || "");
+            });
+            if (link != null && link.driverRowIndex >= 0) sel[key] = link.driverRowIndex;
+          });
+        });
+        codriverSelections = sel;
+      }
+        render();
+      } catch (e) {
+        showLoadingFailed(String(e));
+      }
+    }).catch(function (e) {
+      showLoadingFailed(String(e));
+    });
+  }
+
+  function render() {
+    var loadingEl = document.getElementById("loading");
+    var contentEl = document.getElementById("content");
+    if (!job) {
+      loadingEl.style.display = "block";
+      contentEl.style.display = "none";
+      return;
+    }
+    loadingEl.style.display = "none";
+    contentEl.style.display = "block";
+    setErr(err);
+
+    if (job.status === "queued" || job.status === "running") {
+      contentEl.innerHTML = "<p>処理中...</p>";
+      return;
+    }
+
+    if (job.status === "merge_decision_required" && job.mergeGroups && job.mergeGroups.length > 0) {
+      renderMerge();
+      return;
+    }
+    if (job.status === "link_decision_required") {
+      renderLink();
+      return;
+    }
+    if (job.status === "codriver_link_required") {
+      renderCodriver();
+      return;
+    }
+    if (job.status === "manual_input_required" && job.pendingRows && job.pendingRows.length > 0) {
+      renderManual();
+      return;
+    }
+    if (job.status === "succeeded") {
+      contentEl.innerHTML = "<p style=\"margin-top:8px\">Excelのダウンロードが完了しました。</p>";
+      return;
+    }
+    if (job.status === "failed") {
+      contentEl.innerHTML = "<p class=\"err\">ジョブが失敗しました。</p>";
+      return;
+    }
+    contentEl.innerHTML = "<p>状態: " + (job.status || "—") + "</p>";
+  }
+
+  function renderMerge() {
+    var gs = job.mergeGroups;
+    var html = '<div style="margin-top:16px;margin-bottom:16px"><p style="margin-bottom:8px">あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。<br><br>同じ乗務員で「帰庫」→次の「出庫」が3時間未満の運行があります。まとめる運行を個別に選択してください。</p>';
+    html += '<table class="job-table" style="table-layout:fixed;width:100%;min-width:950px"><thead><tr><th style="width:12%">乗務員ID</th><th style="width:10%">乗務員名</th><th style="width:42%">運行ID / 出庫日時 / 帰庫日時</th><th style="width:16%">まとめる運行</th><th style="width:20%;min-width:200px">運行日をどれにしますか？</th></tr></thead><tbody>';
+    for (var gi = 0; gi < gs.length; gi++) {
+      var g = gs[gi];
+      var dates = g.運行日リスト || [];
+      var runs = g.運行リスト || [];
+      var selected = (mergeSelections[gi] && mergeSelections[gi].length) ? mergeSelections[gi] : runs.map(function (_, ri) { return ri; });
+      if (!mergeSelections[gi] || mergeSelections[gi].length === 0) mergeSelections[gi] = selected.slice();
+      var mergedCount = selected.length;
+      var choiceIdx = runDateChoiceIndex[gi] != null ? runDateChoiceIndex[gi] : 0;
+      var mergedDates = selected.map(function (ri) { return dates[ri]; });
+      html += "<tr><td>" + (g.乗務員ID || "—") + "</td><td>" + (g.乗務員名 || "—") + "</td><td style=\"vertical-align:top\">";
+      if (runs.length > 0) {
+        html += '<table border="0" cellpadding="2" style="border-collapse:collapse;width:100%"><tbody>';
+        for (var ri = 0; ri < runs.length; ri++) {
+          var r = runs[ri];
+          html += "<tr><td style=\"border-bottom:" + (ri < runs.length - 1 ? "1px solid #ddd" : "none") + ";padding:2px 0\"><strong>" + (r.運行ID || "—") + "</strong><br><span style=\"white-space:nowrap\">出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—") + "</span></td></tr>";
+        }
+        html += "</tbody></table>";
+      } else {
+        html += (g.運行IDs || []).join(", ");
+      }
+      html += "</td><td style=\"vertical-align:top\">";
+      if (runs.length > 0) {
+        for (var ri = 0; ri < runs.length; ri++) {
+          var r = runs[ri];
+          var checked = selected.indexOf(ri) >= 0 ? " checked" : "";
+          html += '<label class="merge-check" data-gi="' + gi + '" data-ri="' + ri + '"><input type="checkbox" id="merge_cb_' + gi + '_' + ri + '"' + checked + '><span>運行' + (ri + 1) + ': ' + (r.運行ID || "—") + '</span></label>';
+        }
+      } else {
+        html += "—";
+      }
+      html += "</td><td style=\"min-width:200px\">";
+      if (mergedCount >= 2 && mergedDates.length >= 2) {
+        var seen = {};
+        var options = [];
+        mergedDates.forEach(function (d, di) {
+          var key = d != null ? String(d).trim() : "";
+          if (!seen[key]) { seen[key] = true; options.push({ label: key || "—", value: di }); }
+        });
+        var currentDate = mergedDates[choiceIdx] != null ? String(mergedDates[choiceIdx]).trim() : "";
+        var selectedValue = options[0] ? options[0].value : 0;
+        for (var oi = 0; oi < options.length; oi++) {
+          if ((mergedDates[options[oi].value] != null ? String(mergedDates[options[oi].value]).trim() : "") === currentDate) {
+            selectedValue = options[oi].value;
+            break;
+          }
+        }
+        html += '<select id="run_date_sel_' + gi + '" style="width:130px;max-width:100%">';
+        options.forEach(function (o) {
+          html += '<option value="' + o.value + '"' + (o.value === selectedValue ? " selected" : "") + ">" + o.label + "</option>";
+        });
+        html += "</select>";
+      } else if (mergedCount >= 2 && mergedDates.length === 1) {
+        html += (mergedDates[0] != null ? String(mergedDates[0]) : "—");
+      } else {
+        html += '<span style="color:#888">2つ以上選択で表示</span>';
+      }
+      html += "</td></tr>";
+    }
+    html += "</tbody></table>";
+    html += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">';
+    html += '<button type="button" id="btnMergeBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + '>' + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
+    html += '<button type="button" id="btnMergeNext" class="btn-primary" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "処理中..." : "次へ") + "</button>";
+    html += "</div></div>";
+    document.getElementById("content").innerHTML = html;
+
+    document.querySelectorAll(".merge-check input[type=checkbox]").forEach(function (cb) {
+      cb.addEventListener("change", function () {
+        var gi = parseInt(cb.id.replace("merge_cb_", "").split("_")[0], 10);
+        var ri = parseInt(cb.id.replace("merge_cb_", "").split("_")[1], 10);
+        var arr = (mergeSelections[gi] || []).slice();
+        var idx = arr.indexOf(ri);
+        if (idx >= 0) arr.splice(idx, 1);
+        else arr.push(ri);
+        arr.sort(function (a, b) { return a - b; });
+        mergeSelections[gi] = arr;
+        render();
+      });
+    });
+    document.querySelectorAll("[id^=run_date_sel_]").forEach(function (sel) {
+      var gi = parseInt(sel.id.replace("run_date_sel_", ""), 10);
+      sel.addEventListener("change", function () {
+        runDateChoiceIndex[gi] = parseInt(sel.value, 10);
+      });
+    });
+    document.getElementById("btnMergeBack").addEventListener("click", function () {
+      if (submitting) return;
+      window.history.back();
+    });
+    document.getElementById("btnMergeNext").addEventListener("click", submitMerge);
+  }
+
+  function submitMerge() {
+    if (!job || !job.mergeGroups || submitting) return;
+    setErr("");
+    var mergeSets = [];
+    var runDateChoices = [];
+    for (var gi = 0; gi < job.mergeGroups.length; gi++) {
+      var g = job.mergeGroups[gi];
+      var rowIndices = g.rowIndices || [];
+      var selected = mergeSelections[gi] || [];
+      var checkedRowIndices = selected.filter(function (ri) { return ri >= 0 && ri < rowIndices.length; }).map(function (ri) { return rowIndices[ri]; }).sort(function (a, b) { return a - b; });
+      var sets = [];
+      if (checkedRowIndices.length >= 2) {
+        sets.push(checkedRowIndices);
+        runDateChoices.push(Math.min(runDateChoiceIndex[gi] != null ? runDateChoiceIndex[gi] : 0, checkedRowIndices.length - 1));
+      } else {
+        runDateChoices.push(0);
+      }
+      for (var ri = 0; ri < rowIndices.length; ri++) {
+        if (selected.indexOf(ri) < 0) sets.push([rowIndices[ri]]);
+      }
+      if (sets.length === 0) rowIndices.forEach(function (idx) { sets.push([idx]); });
+      mergeSets.push(sets);
+    }
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-merge", { mergeSets: mergeSets, runDateChoices: runDateChoices })
+      .then(function () { return fetchJob(); })
+      .then(function (j) {
+        job = j;
+        mergeSelections = [];
+        runDateChoiceIndex = {};
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  function renderLink() {
+    var html = '';
+    html += '<div class="link-step-block"><h3 class="link-step-title">説明</h3><div class="link-step-desc">あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。<br>同じ乗務員で「帰庫」→次の「出庫」が3時間以上空いている場合、複数運行を1つにまとめて紐づけできます。</div></div>';
+    html += '<div class="link-step-block link-step-choice"><h3 class="link-step-title">紐づけますか？</h3><p>まとめたい運行があれば「はい」、なければ「いいえ」を選んでください。</p><div class="link-step-choice-btns">';
+    html += '<button type="button" id="linkYes" class="btn-secondary" ' + (linkWantAdd ? "style=\"background:#c8e6c9;border:2px solid #2e7d32;font-weight:bold\"" : "") + '>はい（ペアを指定）</button>';
+    html += '<button type="button" id="linkNo" class="btn-secondary" ' + (!linkWantAdd ? "style=\"background:#e0e0e0;border:2px solid #616161;font-weight:bold\"" : "") + '>いいえ（このまま次へ）</button></div></div>';
+    if (linkWantAdd && job.linkRuns && job.linkRuns.length >= 2) {
+      html += '<div class="link-step-block link-step-groups"><h3 class="link-step-title">紐づける運行グループ（2本以上で1つにまとめられます）</h3>';
+      for (var gi = 0; gi < linkGroups.length; gi++) {
+        var grp = linkGroups[gi];
+        html += '<div class="link-group-box" data-gi="' + gi + '"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">';
+        (grp.runIds || []).forEach(function (rid, ri) {
+          var r = job.linkRuns.find(function (x) { return x.運行ID === rid; });
+          html += '<span style="display:inline-flex;align-items:center;gap:4px">' + (ri > 0 ? '<span style="color:#888">＋</span>' : "") + '<span style="font-size:13px">' + (r ? r.運行ID + " / " + (r.乗務員名 || "—") : rid) + '</span><button type="button" class="link-remove-run" data-gi="' + gi + '" data-rid="' + rid + '" style="padding:2px 6px;font-size:12px">削除</button></span>';
+        });
+        var availableRuns = job.linkRuns.filter(function (r) { return (grp.runIds || []).indexOf(r.運行ID) < 0; }).sort(function (a, b) {
+          var na = (a.乗務員名 || "").trim();
+          var nb = (b.乗務員名 || "").trim();
+          if (na !== nb) return na.localeCompare(nb, "ja");
+          return String(a.運行ID || "").localeCompare(String(b.運行ID || ""), "ja");
+        });
+        var driverBg = 1;
+        var prevName = "";
+        html += '<div class="link-add-run-wrap"><button type="button" class="link-add-run-trigger" data-gi="' + gi + '">— 運行を追加 —</button><div class="link-add-run-panel" data-gi="' + gi + '">';
+        html += '<div class="link-add-run-search-row"><input type="text" class="link-add-run-search" placeholder="名前で検索" autocomplete="off"><button type="button" class="link-add-run-search-clear" title="検索解除" aria-label="検索解除">×</button><button type="button" class="link-add-run-multi-add" title="チェックした運行をこのグループに追加">選択分を追加</button></div>';
+        html += '<div class="link-add-run-opts">';
+        availableRuns.forEach(function (r) {
+          var name = (r.乗務員名 || "").trim();
+          if (name !== prevName) { prevName = name; driverBg = 1 - driverBg; }
+          var rid = (r.運行ID || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          var nameAttr = (r.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          var label = (r.運行ID || "—") + " / " + (r.乗務員名 || "—") + " 出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—");
+          var labelEsc = label.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          html += '<div class="link-add-opt" data-gi="' + gi + '" data-rid="' + rid + '" data-driver-bg="' + driverBg + '" data-driver-name="' + nameAttr + '"><div class="link-add-opt-row"><input type="checkbox" class="link-add-opt-cb"><span class="link-add-opt-label">' + labelEsc + '</span></div></div>';
+        });
+        html += "</div></div></div></div>";
+        if ((grp.runIds || []).length >= 2) {
+          var runDates = (grp.runIds || []).map(function (rid) {
+            var r = job.linkRuns.find(function (x) { return x.運行ID === rid; });
+            return r && r.運行日 != null && String(r.運行日).trim() ? r.運行日 : "";
+          });
+          var seen = {};
+          var options = [];
+          runDates.forEach(function (d, idx) {
+            if (!seen[d]) { seen[d] = true; options.push({ label: d || "—", value: idx }); }
+          });
+          var selVal = grp.運行日を != null ? grp.運行日を : 0;
+          if (options.length) {
+            var curDate = runDates[grp.運行日を];
+            for (var oi = 0; oi < options.length; oi++) {
+              if (runDates[options[oi].value] === curDate) { selVal = options[oi].value; break; }
+            }
+          }
+          html += '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:13px">運行日を</span><select class="link-date-sel" data-gi="' + gi + '" style="min-width:180px">';
+          options.forEach(function (o) {
+            html += '<option value="' + o.value + '"' + (o.value === selVal ? " selected" : "") + ">" + o.label + "</option>";
+          });
+          html += "</select></div>";
+        }
+        html += '<button type="button" class="link-del-group" data-gi="' + gi + '" style="margin-top:6px;padding:2px 8px;font-size:12px">このグループを削除</button></div>';
+      }
+      html += '<div class="link-step-group-actions"><button type="button" id="linkAddGroup" class="btn-secondary" style="padding:6px 12px">グループを追加</button><button type="button" id="linkCancel" class="btn-secondary" style="padding:6px 12px">キャンセル</button></div></div>';
+    }
+    if (linkWantAdd && (!job.linkRuns || job.linkRuns.length < 2)) {
+      html += '<div class="link-step-block"><p style="color:#666;margin:0">紐づけ可能な運行が2件未満です。「いいえ」を選んで「次へ」で進んでください。</p></div>';
+    }
+    html += '<div class="link-step-nav"><button type="button" id="btnLinkBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
+    var canNext = !linkWantAdd || linkGroups.length === 0 || linkGroups.some(function (g) { return (g.runIds || []).length >= 2; });
+    html += '<button type="button" id="btnLinkNext" class="btn-primary" ' + (submitting || (linkWantAdd && !canNext) ? "disabled" : "") + ">" + (submitting ? "処理中..." : "次へ") + "</button></div>";
+    document.getElementById("content").innerHTML = html;
+
+    document.getElementById("linkYes").addEventListener("click", function () {
+      linkWantAdd = true;
+      render();
+    });
+    document.getElementById("linkNo").addEventListener("click", function () {
+      linkWantAdd = false;
+      render();
+    });
+    document.getElementById("btnLinkBack").addEventListener("click", doRevertAndRefresh);
+    document.getElementById("btnLinkNext").addEventListener("click", function () {
+      if (linkWantAdd) submitLinkPairs();
+      else submitLinkSkip();
+    });
+    document.querySelectorAll(".link-remove-run").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var gi = parseInt(btn.getAttribute("data-gi"), 10);
+        var rid = btn.getAttribute("data-rid");
+        linkGroups[gi] = linkGroups[gi] || { runIds: [], 運行日を: 0 };
+        linkGroups[gi].runIds = (linkGroups[gi].runIds || []).filter(function (id) { return id !== rid; });
+        render();
+      });
+    });
+    document.querySelectorAll(".link-add-run-trigger").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var wrap = btn.closest(".link-add-run-wrap");
+        var panel = wrap && wrap.querySelector(".link-add-run-panel");
+        if (!panel) return;
+        var isOpen = panel.classList.toggle("is-open");
+        if (isOpen) {
+          var closeHandler = function (e) {
+            if (panel.contains(e.target)) return;
+            panel.classList.remove("is-open");
+            document.removeEventListener("click", closeHandler);
+          };
+          panel._closeHandler = closeHandler;
+          setTimeout(function () { document.addEventListener("click", closeHandler); }, 0);
+        }
+      });
+    });
+    document.querySelectorAll(".link-add-run-search").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var panel = inp.closest(".link-add-run-panel");
+        if (!panel) return;
+        var opts = panel.querySelectorAll(".link-add-opt");
+        var q = (inp.value || "").trim();
+        opts.forEach(function (opt) {
+          var name = opt.getAttribute("data-driver-name") || "";
+          opt.style.display = (q === "" || name.indexOf(q) !== -1) ? "" : "none";
+        });
+      });
+      inp.addEventListener("click", function (e) { e.stopPropagation(); });
+    });
+    document.querySelectorAll(".link-add-run-search-clear").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var panel = btn.closest(".link-add-run-panel");
+        if (!panel) return;
+        var inp = panel.querySelector(".link-add-run-search");
+        if (inp) inp.value = "";
+        var opts = panel.querySelectorAll(".link-add-opt");
+        opts.forEach(function (opt) { opt.style.display = ""; });
+      });
+    });
+    if (!window._linkAddOptDelegationAttached) {
+      window._linkAddOptDelegationAttached = true;
+      document.getElementById("content").addEventListener("click", function (e) {
+        var opt = e.target.closest(".link-add-opt");
+        if (!opt) return;
+        if (e.target.closest(".link-add-opt-cb")) return;
+        e.stopPropagation();
+        var rid = opt.getAttribute("data-rid");
+        if (!rid) return;
+        var gi = parseInt(opt.getAttribute("data-gi"), 10);
+        var wrap = opt.closest(".link-add-run-wrap");
+        var panel = wrap && wrap.querySelector(".link-add-run-panel");
+        if (panel && panel._closeHandler) {
+          document.removeEventListener("click", panel._closeHandler);
+        }
+        linkGroups[gi] = linkGroups[gi] || { runIds: [], 運行日を: 0 };
+        if (linkGroups[gi].runIds.indexOf(rid) < 0) linkGroups[gi].runIds = linkGroups[gi].runIds.concat([rid]);
+        render();
+      });
+    }
+    document.querySelectorAll(".link-add-run-multi-add").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var panel = btn.closest(".link-add-run-panel");
+        if (!panel) return;
+        var gi = parseInt(panel.getAttribute("data-gi"), 10);
+        var opts = panel.querySelectorAll(".link-add-opt");
+        var toAdd = [];
+        opts.forEach(function (opt) {
+          if (opt.style.display === "none") return;
+          var cb = opt.querySelector(".link-add-opt-cb");
+          if (cb && cb.checked) {
+            var rid = opt.getAttribute("data-rid");
+            if (rid) toAdd.push(rid);
+          }
+        });
+        if (toAdd.length === 0) return;
+        if (panel._closeHandler) document.removeEventListener("click", panel._closeHandler);
+        linkGroups[gi] = linkGroups[gi] || { runIds: [], 運行日を: 0 };
+        toAdd.forEach(function (rid) {
+          if (linkGroups[gi].runIds.indexOf(rid) < 0) linkGroups[gi].runIds = linkGroups[gi].runIds.concat([rid]);
+        });
+        render();
+      });
+    });
+    document.querySelectorAll(".link-date-sel").forEach(function (sel) {
+      sel.addEventListener("change", function () {
+        var gi = parseInt(sel.getAttribute("data-gi"), 10);
+        linkGroups[gi] = linkGroups[gi] || { runIds: [], 運行日を: 0 };
+        linkGroups[gi].運行日を = parseInt(sel.value, 10);
+      });
+    });
+    document.querySelectorAll(".link-del-group").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var gi = parseInt(btn.getAttribute("data-gi"), 10);
+        linkGroups = linkGroups.filter(function (_, i) { return i !== gi; });
+        render();
+      });
+    });
+    var addGroupBtn = document.getElementById("linkAddGroup");
+    if (addGroupBtn) addGroupBtn.addEventListener("click", function () {
+      linkGroups = linkGroups.concat([{ runIds: [], 運行日を: 0 }]);
+      render();
+    });
+    var cancelBtn = document.getElementById("linkCancel");
+    if (cancelBtn) cancelBtn.addEventListener("click", function () {
+      linkWantAdd = false;
+      linkGroups = [];
+      render();
+    });
+  }
+
+  function doRevertAndRefresh() {
+    if (submitting) return;
+    setErr("");
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/revert-step", {})
+      .then(function () { return fetchJob(); })
+      .then(function (j) {
+        job = j;
+        if (j.status === "merge_decision_required" && j.mergeGroups && j.mergeGroups.length && j.mergeSets != null && j.runDateChoices != null) {
+          mergeSelections = j.mergeGroups.map(function (g, gi) {
+            var rowIndices = g.rowIndices || [];
+            var sets = (j.mergeSets || [])[gi] || [];
+            var checked = [];
+            sets.forEach(function (s) {
+              if (s.length >= 2) s.forEach(function (idx) {
+                var ri = rowIndices.indexOf(idx);
+                if (ri >= 0) checked.push(ri);
+              });
+            });
+            return checked.length ? checked : rowIndices.map(function (_, ri) { return ri; });
+          });
+          runDateChoiceIndex = {};
+          (j.runDateChoices || []).forEach(function (v, i) { runDateChoiceIndex[i] = v; });
+        }
+        if (j.status === "link_decision_required") {
+          linkWantAdd = true;
+          if ((j.linkGroups || []).length > 0) linkGroups = j.linkGroups.slice();
+          else if ((j.linkPairs || []).length > 0) {
+            linkGroups = j.linkPairs.map(function (p) {
+              return { runIds: [p.運行ID1, p.運行ID2].filter(Boolean), 運行日を: p.運行日を === "second" ? 1 : 0 };
+            });
+          } else linkGroups = [];
+        }
+        manualEdits = {};
+        codriverSelections = {};
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  function submitLinkSkip() {
+    setErr("");
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-link-skip", {})
+      .then(function () { return fetchJob(); })
+      .then(function (j) {
+        job = j;
+        linkGroups = [];
+        linkWantAdd = false;
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  function submitLinkPairs() {
+    var payload = linkGroups.length > 0
+      ? { linkGroups: linkGroups.map(function (g) { return { runIds: g.runIds || [], 運行日を: g.運行日を != null ? g.運行日を : 0 }; }) }
+      : { pairs: [] };
+    setErr("");
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-link-pairs", payload)
+      .then(function () { return fetchJob(); })
+      .then(function (j) {
+        job = j;
+        linkGroups = [];
+        linkWantAdd = false;
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  function renderCodriver() {
+    var crew = job.alcoholOnlyCrew || [];
+    var dr = job.driverRows || [];
+    var html = '<div style="margin-top:16px;margin-bottom:16px;position:relative">';
+    html += '<p style="margin-bottom:12px;font-size:14px;color:#555">以下は「デジタコ」のデータがなく「アルコール」のデータだけある乗務員の一覧です。<br><strong style="font-size:16px">① この中から横乗りした運行のみ、同乗者の運行を選択してください。</strong><br><strong style="font-size:16px">② 「関係ない日」や「横乗りしてない」ものは未選択でOKです。</strong></p>';
+    if (crew.length > 0 && dr.length > 0) {
+      html += '<div style="position:absolute;top:-20px;right:-120px;max-width:760px;font-size:14px;background:#fff8e1;border:1px solid #ffb300;padding:12px 20px;border-radius:6px;line-height:1.7;box-shadow:0 3px 8px rgba(0,0,0,0.2)"><div style="font-weight:bold;margin-bottom:4px">コメント</div><div>Q. 添乗してないのに以下のリストになんで出てくるの？</div><div>A. 「日報のファイルがアップロードされてなかったり、デジタコのIDが本人の乗務員IDじゃなく走行した時だよ。」</div></div>';
+      html += '<div style="border:1px solid #ccc;padding:12px;max-width:100%;margin-top:64px"><table class="job-table codriver-tbl" style="width:100%;table-layout:fixed"><colgroup><col><col><col><col><col style="width:40%"></colgroup><thead><tr><th class="border-heavy">乗務員ID</th><th class="border-heavy">乗務員名</th><th class="border-heavy">出庫日時</th><th class="border-heavy">帰庫日時</th><th class="border-heavy codriver-col">誰と添乗しましたか？</th></tr></thead><tbody>';
+      var codriverPrevDriver = "";
+      var codriverDriverBg = 1;
+      crew.forEach(function (c) {
+        (c.runs || []).forEach(function (run, runIndex) {
+          var driverKey = (c.乗務員ID正規化 || c.乗務員名 || "").trim();
+          if (driverKey !== codriverPrevDriver) { codriverPrevDriver = driverKey; codriverDriverBg = 1 - codriverDriverBg; }
+          var rowBgClass = "codriver-row-bg-" + codriverDriverBg;
+          var key = (c.乗務員ID正規化 || "") + "_" + runIndex;
+          var sel = codriverSelections[key];
+          var keyEsc = key.replace(/"/g, "&quot;");
+          var triggerContent = "— 選択 —";
+          if (sel !== undefined && sel !== null) {
+            var chosen = dr.find(function (d) { return d.rowIndex === sel; });
+            if (chosen) {
+              var line1 = (chosen.運行ID || "—") + " / " + (chosen.乗務員名 || "—");
+              var line2 = "出庫:" + (chosen.出庫日時 || "—") + " 帰庫:" + (chosen.帰庫日時 || "—");
+              triggerContent = '<span class="codriver-trigger-line1">' + line1.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span><span class="codriver-trigger-line2">' + line2.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span>';
+            }
+          } else {
+            triggerContent = triggerContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          }
+          html += "<tr class=\"" + rowBgClass + "\"><td style=\"white-space:nowrap\">" + (c.乗務員ID || "—") + "</td><td style=\"white-space:nowrap\">" + (c.乗務員名 || "—") + "</td><td style=\"white-space:nowrap\">" + (run.出庫日時 || "—") + "</td><td style=\"white-space:nowrap\">" + (run.帰庫日時 || "—") + "</td><td class=\"codriver-col\"><div class=\"codriver-cell\"><div class=\"codriver-wrap\" data-key=\"" + keyEsc + "\"><button type=\"button\" class=\"codriver-trigger\" data-key=\"" + keyEsc + "\">" + triggerContent + "</button><div class=\"codriver-panel\" data-key=\"" + keyEsc + "\">";
+          html += '<div class="codriver-search-row"><input type="text" class="codriver-search" placeholder="名前で検索" autocomplete="off"><button type="button" class="codriver-search-clear" title="検索解除" aria-label="検索解除">×</button></div><div class="codriver-opts">';
+          html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="">— 選択 —</div>';
+          var drSorted = dr.slice().sort(function (a, b) {
+            var na = (a.乗務員名 || "").trim();
+            var nb = (b.乗務員名 || "").trim();
+            if (na !== nb) return na.localeCompare(nb, "ja");
+            return (a.rowIndex || 0) - (b.rowIndex || 0);
+          });
+          var optDriverBg = 1;
+          var optPrevName = "";
+          drSorted.forEach(function (d) {
+            var name = (d.乗務員名 || "").trim();
+            if (name !== optPrevName) { optPrevName = name; optDriverBg = 1 - optDriverBg; }
+            var lab = (d.運行ID || "—") + " / " + (d.乗務員名 || "—") + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
+            var nameAttr = (d.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="' + d.rowIndex + '" data-driver-name="' + nameAttr + '" data-driver-bg="' + optDriverBg + '">' + lab.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
+          });
+          html += "</div></div></div>";
+          if (sel !== undefined && sel !== null) {
+            html += '<button type="button" class="codriver-clear" data-key="' + keyEsc + '" title="選択をはずす" aria-label="選択をはずす">×</button>';
+          }
+          html += "</div></td></tr>";
+        });
+      });
+      html += "</tbody></table>";
+      var dis = submitting ? " disabled" : "";
+      html += "<div style=\"display:flex;gap:8px;margin-top:12px;flex-wrap:wrap\"><button type=\"button\" id=\"btnCodriverBack\" class=\"btn-secondary\"" + dis + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button><button type=\"button\" id=\"btnCodriverNext\" class=\"btn-primary\"" + dis + ">" + (submitting ? "処理中..." : "次へ") + "</button></div></div>";
+    } else {
+      html += '<p style="color:#666;margin-bottom:8px">同乗者またはデジタコ運行データがありません。</p>';
+      var dis2 = submitting ? " disabled" : "";
+      html += "<div style=\"display:flex;gap:8px;flex-wrap:wrap\"><button type=\"button\" id=\"btnCodriverBack\" class=\"btn-secondary\"" + dis2 + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button><button type=\"button\" id=\"btnCodriverSkip\" class=\"btn-primary\"" + dis2 + ">" + (submitting ? "処理中..." : "次へ") + "</button></div>";
+    }
+    html += "</div>";
+    document.getElementById("content").innerHTML = html;
+
+    document.querySelectorAll(".codriver-trigger").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var wrap = btn.closest(".codriver-wrap");
+        var panel = wrap && wrap.querySelector(".codriver-panel");
+        if (!panel) return;
+        var isOpen = panel.classList.toggle("is-open");
+        if (isOpen) {
+          var closeHandler = function (ev) {
+            if (panel.contains(ev.target)) return;
+            panel.classList.remove("is-open");
+            document.removeEventListener("click", closeHandler);
+          };
+          panel._closeHandler = closeHandler;
+          setTimeout(function () { document.addEventListener("click", closeHandler); }, 0);
+        }
+      });
+    });
+    if (!window._codriverOptDelegationAttached) {
+      window._codriverOptDelegationAttached = true;
+      document.getElementById("content").addEventListener("click", function (e) {
+        var opt = e.target.closest(".codriver-opt");
+        if (!opt) return;
+        e.stopPropagation();
+        var key = opt.getAttribute("data-key");
+        var ri = opt.getAttribute("data-row-index");
+        var panel = opt.closest(".codriver-panel");
+        if (panel && panel._closeHandler) document.removeEventListener("click", panel._closeHandler);
+        codriverSelections[key] = (ri === "" || ri == null) ? undefined : parseInt(ri, 10);
+        render();
+      });
+    }
+    document.querySelectorAll(".codriver-search").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var panel = inp.closest(".codriver-panel");
+        if (!panel) return;
+        var opts = panel.querySelectorAll(".codriver-opt");
+        var q = (inp.value || "").trim();
+        opts.forEach(function (opt) {
+          var ri = opt.getAttribute("data-row-index");
+          if (ri === "" || ri == null) {
+            opt.style.display = "";
+            return;
+          }
+          var name = opt.getAttribute("data-driver-name") || "";
+          opt.style.display = (q === "" || name.indexOf(q) !== -1) ? "" : "none";
+        });
+      });
+      inp.addEventListener("click", function (e) { e.stopPropagation(); });
+    });
+    document.querySelectorAll(".codriver-search-clear").forEach(function (btn) {
+      btn.addEventListener("click", function (e) {
+        e.stopPropagation();
+        var panel = btn.closest(".codriver-panel");
+        if (!panel) return;
+        var inp = panel.querySelector(".codriver-search");
+        if (inp) inp.value = "";
+        var opts = panel.querySelectorAll(".codriver-opt");
+        opts.forEach(function (opt) { opt.style.display = ""; });
+      });
+    });
+    document.querySelectorAll(".codriver-clear").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var key = btn.getAttribute("data-key");
+        codriverSelections[key] = undefined;
+        render();
+      });
+    });
+    var backBtn = document.getElementById("btnCodriverBack");
+    if (backBtn) backBtn.addEventListener("click", doRevertAndRefresh);
+    var nextBtn = document.getElementById("btnCodriverNext");
+    if (nextBtn) nextBtn.addEventListener("click", submitCodriverLink);
+    var skipBtn = document.getElementById("btnCodriverSkip");
+    if (skipBtn) skipBtn.addEventListener("click", submitCodriverSkip);
+  }
+
+  function submitCodriverSkip() {
+    setErr("");
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-codriver-skip", {})
+      .then(function () { return fetchJob(); })
+      .then(function (j) {
+        job = j;
+        codriverSelections = {};
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  function submitCodriverLink() {
+    var crew = job.alcoholOnlyCrew || [];
+    var dr = job.driverRows || [];
+    var links = [];
+    crew.forEach(function (c) {
+      var norm = c.乗務員ID正規化 || "";
+      (c.runs || []).forEach(function (_, runIndex) {
+        var key = norm + "_" + runIndex;
+        var driverRowIndex = codriverSelections[key];
+        if (driverRowIndex != null && driverRowIndex >= 0 && dr.some(function (d) { return d.rowIndex === driverRowIndex; })) {
+          links.push({ 乗務員ID正規化: norm, runIndex: runIndex, driverRowIndex: driverRowIndex });
+        }
+      });
+    });
+    setErr("");
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-codriver-link", { links: links })
+      .then(function () { return fetchJob(); })
+      .then(function (j) {
+        job = j;
+        codriverSelections = {};
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  function renderManual() {
+    var pendingRows = job.pendingRows;
+    var uniqueDateKeys = [];
+    var seen = {};
+    pendingRows.forEach(function (r) {
+      var k = normalizeDateKey(getManualRow(r).出庫日);
+      if (k && !seen[k]) { seen[k] = true; uniqueDateKeys.push(k); }
+    });
+    uniqueDateKeys.sort();
+    var displayRows = manualDateFilter === "" ? pendingRows : pendingRows.filter(function (r) { return normalizeDateKey(getManualRow(r).出庫日) === manualDateFilter; });
+
+    var html = '<div style="margin-top:16px;margin-bottom:16px;position:relative">';
+    html += '<div style="position:absolute;top:-100px;right:-5px;max-width:400px;font-size:14px;background:#fff8e1;border:1px solid #ffb300;padding:12px 20px;border-radius:6px;line-height:1.6;box-shadow:0 3px 8px rgba(0,0,0,0.2)"><div style="font-weight:bold;margin-bottom:4px">コメント</div><div>必要ない運行日は未入力でOK</div></div>';
+    html += '<p style="margin-bottom:8px">「アルコール検知器」を<strong>吹いてないか</strong>、吹いた時間が「デジタコ」の出庫/帰庫時間と<strong>離れすぎてるか</strong>で「紐づかなかった」乗務員の一覧です。<br>出庫・帰庫の日時を手入力してください。</p>';
+    html += '<div style="margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:14px;font-weight:500">出庫日で絞り込み:</span><select id="manualDateFilter" style="padding:4px 8px;font-size:14px;min-width:140px"><option value="">すべて表示</option>';
+    uniqueDateKeys.forEach(function (key) {
+      html += '<option value="' + key.replace(/"/g, "&quot;") + '"' + (manualDateFilter === key ? " selected" : "") + ">" + formatDateLabel(key) + "</option>";
+    });
+    html += "</select>";
+    if (manualDateFilter !== "") {
+      html += '<span style="font-size:13px;color:#666">（' + displayRows.length + "件表示 / 全" + pendingRows.length + "件）</span>";
+    }
+    html += "</div>";
+    html += '<table class="job-table manual-tbl" style="max-width:1000px"><thead><tr><th>運行ID</th><th>乗務員ID</th><th>乗務員名</th><th>出庫（日付 / h:mm）</th><th>帰庫（日付 / h:mm）</th></tr></thead><tbody>';
+    var manualPrevDriver = "";
+    var manualDriverBg = 1;
+    displayRows.forEach(function (r) {
+      var driverKey = (r.乗務員ID || r.乗務員名 || "").toString().trim();
+      if (driverKey !== manualPrevDriver) { manualPrevDriver = driverKey; manualDriverBg = 1 - manualDriverBg; }
+      var manualRowBgClass = "manual-row-bg-" + manualDriverBg;
+      var m = getManualRow(r);
+      html += "<tr class=\"" + manualRowBgClass + "\"><td>" + (r.運行ID || "—") + "</td><td>" + (r.乗務員ID || "—") + "</td><td>" + (r.乗務員名 || "—") + "</td><td style=\"white-space:nowrap\">";
+      html += '<input type="text" class="manual-out-date" data-row="' + r.rowIndex + '" data-field="out-date" value="' + (m.出庫日 || "").replace(/"/g, "&quot;") + '" style="width:100px;margin-right:4px" size="10">';
+      html += '<input type="text" inputmode="numeric" class="manual-out-h" data-row="' + r.rowIndex + '" data-field="out-h" value="' + (m.出庫時 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
+      html += '<span style="margin:0 2px">:</span>';
+      html += '<input type="text" inputmode="numeric" class="manual-out-m" data-row="' + r.rowIndex + '" data-field="out-m" value="' + (m.出庫分 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
+      html += "</td><td style=\"white-space:nowrap\">";
+      html += '<input type="text" class="manual-in-date" data-row="' + r.rowIndex + '" data-field="in-date" value="' + (m.帰庫日 || "").replace(/"/g, "&quot;") + '" style="width:100px;margin-right:4px" size="10">';
+      html += '<input type="text" inputmode="numeric" class="manual-in-h" data-row="' + r.rowIndex + '" data-field="in-h" value="' + (m.帰庫時 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
+      html += '<span style="margin:0 2px">:</span>';
+      html += '<input type="text" inputmode="numeric" class="manual-in-m" data-row="' + r.rowIndex + '" data-field="in-m" value="' + (m.帰庫分 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
+      html += "</td></tr>";
+    });
+    html += "</tbody></table>";
+    html += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button type="button" id="btnManualBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
+    html += '<button type="button" id="btnManualDl" class="btn-primary" ' + (submitting ? "disabled" : "") + ' title="押すとExcelを出力し、ダウンロードできます">' + (submitting ? "ダウンロード中..." : "ダウンロード") + "</button></div></div>";
+    document.getElementById("content").innerHTML = html;
+
+    document.getElementById("manualDateFilter").addEventListener("change", function () {
+      manualDateFilter = this.value;
+      render();
+    });
+    document.querySelectorAll(".manual-out-date").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var row = parseInt(inp.getAttribute("data-row"), 10);
+        manualEdits[row] = manualEdits[row] || {};
+        manualEdits[row].出庫日 = inp.value;
+      });
+    });
+    document.querySelectorAll(".manual-out-h").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var row = parseInt(inp.getAttribute("data-row"), 10);
+        var self = inp;
+        setTimeout(function () {
+          var raw = self.value.replace(/\D/g, "");
+          var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
+          if (self.value !== norm) self.value = norm;
+          manualEdits[row] = manualEdits[row] || {};
+          manualEdits[row].出庫時 = self.value;
+        }, 0);
+      });
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); validateTimeAndFocusNext(inp); }
+      });
+    });
+    document.querySelectorAll(".manual-out-m").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var row = parseInt(inp.getAttribute("data-row"), 10);
+        var self = inp;
+        setTimeout(function () {
+          var raw = self.value.replace(/\D/g, "");
+          var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
+          if (self.value !== norm) self.value = norm;
+          manualEdits[row] = manualEdits[row] || {};
+          manualEdits[row].出庫分 = self.value;
+        }, 0);
+      });
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); validateTimeAndFocusNext(inp); }
+      });
+    });
+    document.querySelectorAll(".manual-in-date").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var row = parseInt(inp.getAttribute("data-row"), 10);
+        manualEdits[row] = manualEdits[row] || {};
+        manualEdits[row].帰庫日 = inp.value;
+      });
+    });
+    document.querySelectorAll(".manual-in-h").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var row = parseInt(inp.getAttribute("data-row"), 10);
+        var self = inp;
+        setTimeout(function () {
+          var raw = self.value.replace(/\D/g, "");
+          var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
+          if (self.value !== norm) self.value = norm;
+          manualEdits[row] = manualEdits[row] || {};
+          manualEdits[row].帰庫時 = self.value;
+        }, 0);
+      });
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); validateTimeAndFocusNext(inp); }
+      });
+    });
+    document.querySelectorAll(".manual-in-m").forEach(function (inp) {
+      inp.addEventListener("input", function () {
+        var row = parseInt(inp.getAttribute("data-row"), 10);
+        var self = inp;
+        setTimeout(function () {
+          var raw = self.value.replace(/\D/g, "");
+          var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
+          if (self.value !== norm) self.value = norm;
+          manualEdits[row] = manualEdits[row] || {};
+          manualEdits[row].帰庫分 = self.value;
+        }, 0);
+      });
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); validateTimeAndFocusNext(inp); }
+      });
+    });
+    document.getElementById("btnManualBack").addEventListener("click", doRevertAndRefresh);
+    document.getElementById("btnManualDl").addEventListener("click", submitManual);
+
+    var firstOutH = document.querySelector(".manual-out-h");
+    if (firstOutH) {
+      setTimeout(function () { firstOutH.focus(); firstOutH.select && firstOutH.select(); }, 0);
+    }
+  }
+
+  function triggerDownload(blob, filename) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename || "output.xlsx";
+    a.style.display = "none";
+    document.body.appendChild(a);
+    try {
+      a.click();
+    } catch (e) {
+      window.open(url, "_blank");
+    }
+    setTimeout(function () {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 2000);
+  }
+
+  function submitManual() {
+    if (submitting || !job || !job.pendingRows || job.pendingRows.length === 0) return;
+    var pendingRows = job.pendingRows;
+    for (var i = 0; i < pendingRows.length; i++) {
+      var r = pendingRows[i];
+      var m = getManualRow(r);
+      if (!validateTimeBlock(m.出庫時, m.出庫分) || !validateTimeBlock(m.帰庫時, m.帰庫分)) {
+        setErr("正確な時刻を入力してください");
+        return;
+      }
+    }
+    var entries = pendingRows.map(function (r) {
+      var m = getManualRow(r);
+      return {
+        rowIndex: r.rowIndex,
+        出庫日時: toDatetime(m.出庫日, m.出庫時, m.出庫分),
+        帰庫日時: toDatetime(m.帰庫日, m.帰庫時, m.帰庫分)
+      };
+    });
+    setErr("");
+    submitting = true;
+    render();
+    apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-manual", { entries: entries })
+      .then(function () {
+        var excelUrl = API_BASE + "/api/jobs/" + encodeURIComponent(jobId) + "/download/excel";
+        return fetch(excelUrl, { cache: "no-store" }).then(function (res) {
+          if (!res.ok) {
+            return new Promise(function (resolve) { setTimeout(resolve, 500); }).then(function () {
+              return fetch(excelUrl, { cache: "no-store" });
+            });
+          }
+          return res;
+        });
+      })
+      .then(function (res) {
+        if (!res.ok) throw new Error("Excel の準備ができていません。しばらく待ってから再度「ダウンロード」を押してください。");
+        return res.blob();
+      })
+      .then(function (blob) {
+        if (!blob || blob.size === 0) throw new Error("Excel ファイルの取得に失敗しました。");
+        triggerDownload(blob, "output.xlsx");
+        return fetchJob();
+      })
+      .then(function (j) {
+        job = j;
+        if (j.status === "succeeded") manualEdits = {};
+        submitting = false;
+        render();
+      })
+      .catch(function (e) {
+        setErr(String(e));
+        submitting = false;
+        render();
+      });
+  }
+
+  if (!jobId) {
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("content").style.display = "block";
+    document.getElementById("content").innerHTML = "<p>ジョブIDが指定されていません。</p>";
+  } else {
+    poll();
+  }
+})();
+  </script>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>時間管理システム</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>時間管理システム</h1>
+    <h2>1) 会社</h2>
+    <p id="err" class="err" style="display:none;"></p>
+    <div id="companies" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+    <hr style="margin: 20px 0" />
+    <h3>会社追加</h3>
+    <div style="display:flex; gap:8px;">
+      <input type="text" id="name" placeholder="会社名" style="padding:8px; width:320px" />
+      <button type="button" id="btnAdd" class="btn-primary">追加</button>
+    </div>
+  </div>
+  <script src="app.js"></script>
+  <script>
+    var errEl = document.getElementById("err");
+    var companiesEl = document.getElementById("companies");
+    var nameInput = document.getElementById("name");
+    var btnAdd = document.getElementById("btnAdd");
+
+    function showErr(msg) {
+      errEl.textContent = msg || "";
+      errEl.style.display = msg ? "block" : "none";
+    }
+
+    function refresh() {
+      apiGet("/api/companies").then(function (data) {
+        companiesEl.innerHTML = "";
+        (data.companies || []).forEach(function (c) {
+          var a = document.createElement("a");
+          a.href = "device.html?company=" + encodeURIComponent(c);
+          a.className = "link-card";
+          a.textContent = c;
+          companiesEl.appendChild(a);
+        });
+      }).catch(function (e) { showErr(String(e)); });
+    }
+
+    btnAdd.addEventListener("click", function () {
+      var name = (nameInput.value || "").trim();
+      if (!name) return;
+      showErr("");
+      apiPostJson("/api/companies", { name: name }).then(function () {
+        nameInput.value = "";
+        refresh();
+      }).catch(function (e) { showErr(String(e)); });
+    });
+
+    refresh();
+  </script>
+</body>
+</html>
