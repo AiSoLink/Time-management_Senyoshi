@@ -5,8 +5,9 @@ import re
 import shutil
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from storage.paths import ensure_dirs, APP_ROOT, COMPANIES_DIR, safe_name, job_input_dir, job_output_dir, job_state_path
 from storage.state import JobState, Artifacts, save_state, load_state
 from job_runner import run_job
-from engine.pipeline import complete_manual_input, apply_merge_decision, apply_alcohol_to_run_states, rows_from_run_states, _merge_runs, _write_excel as write_excel
+from engine.pipeline import complete_manual_input, apply_merge_decision, apply_alcohol_to_run_states, rows_from_run_states, _merge_runs, _write_excel as write_excel, _row_to_dt
 from engine.alcohol_integration import integrate_alcohol, alcohol_runs_by_crew, alcohol_only_crew_list, _normalize_crew_id as normalize_crew_id
 from uuid import uuid4
 
@@ -81,43 +82,28 @@ def _apply_entries_to_run_states(
     merge_choices: List[bool],
     merge_sets: Optional[List[List[List[int]]]] = None,
 ) -> None:
-    """手入力 entries を run_states に反映する。②で同一運行にしたグループは代表行の値で全行を埋める。"""
+    """手入力 entries を run_states に反映する。入力した行（row_index）のみ更新し、同一運行グループの他行には流さない。"""
     if not entries:
         return
+
     for e in entries:
         row_index = int(e.get("rowIndex", -1))
         if row_index < 0 or row_index >= len(run_states):
             continue
+
         out_dt = (e.get("出庫日時") or "").strip() or None
         in_dt = (e.get("帰庫日時") or "").strip() or None
-        indices_to_update: List[int] = [row_index]
-        if merge_sets is not None:
-            for sets in merge_sets:
-                for s in sets:
-                    if row_index in s:
-                        indices_to_update = sorted(s)
-                        break
-                if len(indices_to_update) > 1:
-                    break
-        else:
-            for gi, g in enumerate(merge_groups):
-                if gi >= len(merge_choices) or not merge_choices[gi]:
-                    continue
-                idx_set = set(g.get("rowIndices") or [])
-                if row_index in idx_set:
-                    indices_to_update = sorted(idx_set)
-                    break
-        for i in indices_to_update:
-            if i >= len(run_states):
-                continue
-            rs = run_states[i]
-            mh = rs.get("merged_header")
-            if mh is not None:
-                mh["出庫日時"] = out_dt
-                mh["帰庫日時"] = in_dt
-            if rs.get("merged_row") is not None:
-                rs["merged_row"]["出庫日時"] = out_dt
-                rs["merged_row"]["帰庫日時"] = in_dt
+
+        rs = run_states[row_index]
+        mh = rs.get("merged_header")
+        if mh is not None:
+            mh["出庫日時"] = out_dt
+            mh["帰庫日時"] = in_dt
+
+        # ここが重要:
+        # merged_row は拘束時間などの計算済みキャッシュなので、
+        # 出庫/帰庫を変えたら必ず捨てる
+        rs["merged_row"] = None
 
 
 def _pending_rows_with_group_collapse(
@@ -160,6 +146,162 @@ def _pending_rows_with_group_collapse(
                 if i != rep:
                     keep_indices.discard(i)
     return [m for m in missing if m["rowIndex"] in keep_indices]
+
+
+def _normalize_merge_sets(
+    merge_groups: List[Dict[str, Any]],
+    merge_choices: List[bool],
+    merge_sets: Optional[List[List[List[int]]]],
+) -> Optional[List[List[List[int]]]]:
+    if merge_sets is not None:
+        return merge_sets
+    if not merge_groups:
+        return None
+    out: List[List[List[int]]] = []
+    for gi, g in enumerate(merge_groups):
+        indices = [int(i) for i in (g.get("rowIndices") or [])]
+        if gi < len(merge_choices) and merge_choices[gi] and len(indices) >= 2:
+            out.append([indices])
+        else:
+            out.append([[i] for i in indices])
+    return out
+
+
+def _original_to_merged_index_map(
+    total_rows: int,
+    merge_sets: Optional[List[List[List[int]]]],
+) -> Dict[int, int]:
+    parent = list(range(total_rows))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if ra < rb:
+            parent[rb] = ra
+        else:
+            parent[ra] = rb
+
+    if merge_sets:
+        for sets in merge_sets:
+            for s in sets:
+                unique_s = sorted({int(i) for i in s if 0 <= int(i) < total_rows})
+                if len(unique_s) < 2:
+                    continue
+                base = unique_s[0]
+                for idx in unique_s[1:]:
+                    union(base, idx)
+
+    groups: Dict[int, List[int]] = {}
+    for i in range(total_rows):
+        root = find(i)
+        groups.setdefault(root, []).append(i)
+
+    rep_of: Dict[int, int] = {}
+    representatives: List[int] = []
+    for members in groups.values():
+        rep = min(members)
+        representatives.append(rep)
+        for i in members:
+            rep_of[i] = rep
+
+    rep_to_new = {rep: new_idx for new_idx, rep in enumerate(sorted(representatives))}
+    return {i: rep_to_new[rep_of[i]] for i in range(total_rows)}
+
+
+def _remap_entries_row_index(
+    entries: List[Dict[str, Any]],
+    index_map: Dict[int, int],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for e in entries:
+        try:
+            old_idx = int(e.get("rowIndex", -1))
+        except (TypeError, ValueError):
+            continue
+        if old_idx not in index_map:
+            continue
+        ne = dict(e)
+        ne["rowIndex"] = index_map[old_idx]
+        out.append(ne)
+    return out
+
+
+def _remap_codriver_links_row_index(
+    codriver_links: List[Dict[str, Any]],
+    index_map: Dict[int, int],
+) -> List[Dict[str, Any]]:
+    out: List[Dict[str, Any]] = []
+    for link in codriver_links:
+        try:
+            old_idx = int(link.get("driverRowIndex", -1))
+        except (TypeError, ValueError):
+            continue
+        if old_idx not in index_map:
+            continue
+        nl = dict(link)
+        nl["driverRowIndex"] = index_map[old_idx]
+        out.append(nl)
+    return out
+
+
+def _apply_codriver_entries(
+    codriver_links: List[Dict[str, Any]],
+    entries: List[Dict[str, Any]],
+    codriver_start_index: int,
+    codriver_pending_indices: Optional[List[int]] = None,
+) -> None:
+    """手入力の同乗者行（rowIndex >= codriver_start_index）の出庫・帰庫を codriver_links に反映する（in place）。codriver_pending_indices があれば rowIndex はそのリストのインデックスで codriver_links の実インデックスに変換する。"""
+    for e in entries:
+        try:
+            row_index = int(e.get("rowIndex", -1))
+        except (TypeError, ValueError):
+            continue
+        if row_index < codriver_start_index:
+            continue
+        i = row_index - codriver_start_index
+        if codriver_pending_indices is not None:
+            if i >= len(codriver_pending_indices):
+                continue
+            idx = codriver_pending_indices[i]
+        else:
+            idx = i
+        if idx < 0 or idx >= len(codriver_links):
+            continue
+        out_dt = (e.get("出庫日時") or "").strip() or None
+        in_dt = (e.get("帰庫日時") or "").strip() or None
+        if out_dt is not None:
+            codriver_links[idx]["出庫日時"] = out_dt
+        if in_dt is not None:
+            codriver_links[idx]["帰庫日時"] = in_dt
+
+
+# アルコール突合で「紐づいた」とみなす出庫・帰庫の許容差（分）。ドライバーと同じ。
+ALCOHOL_MARGIN_MINUTES = 120
+
+
+def _codriver_alcohol_matches_run(
+    link: Dict[str, Any],
+    run_header: Dict[str, Any],
+    margin_minutes: int = ALCOHOL_MARGIN_MINUTES,
+) -> bool:
+    """同乗者のアルコール出庫・帰庫が、紐づいた運行の出庫・帰庫とマージン内なら True（紐づいた＝リストに出さない）。"""
+    run_out = _row_to_dt(run_header.get("出庫日時"))
+    run_in = _row_to_dt(run_header.get("帰庫日時"))
+    link_out = _row_to_dt(link.get("出庫日時"))
+    link_in = _row_to_dt(link.get("帰庫日時"))
+    if run_out is None or run_in is None or link_out is None or link_in is None:
+        return False
+    delta = timedelta(minutes=margin_minutes)
+    return abs((link_out - run_out).total_seconds()) <= delta.total_seconds() and abs(
+        (link_in - run_in).total_seconds()
+    ) <= delta.total_seconds()
 
 
 DeviceType = Literal["mimamori", "telecom"]
@@ -458,6 +600,42 @@ def _after_link_decision(
     manual_path = out_dir / "manual_input_state.json"
     pending_rows = _pending_rows_with_group_collapse(new_rows, merge_groups, merge_choices, merge_sets)
     codriver_links = codriver_links or []
+    codriver_start_index: Optional[int] = None
+    codriver_pending_indices: Optional[List[int]] = None
+    # 同乗者: ドライバーと同じく「アルコールと運行が紐づいたか」で判定。紐づかなかった同乗者だけリストに載せる。
+    if codriver_links:
+        n_driver = len(run_states)
+        pending_codriver_list: List[Tuple[int, Dict[str, Any]]] = []
+        for idx, link in enumerate(codriver_links):
+            driver_idx = int(link.get("driverRowIndex", -1))
+            if driver_idx < 0 or driver_idx >= n_driver:
+                continue
+            mh = (run_states[driver_idx].get("merged_header") or {})
+            if _codriver_alcohol_matches_run(link, mh):
+                continue
+            pending_codriver_list.append((idx, link))
+        if pending_codriver_list:
+            codriver_start_index = n_driver
+            codriver_pending_indices = [idx for idx, _ in pending_codriver_list]
+            for i, (idx, link) in enumerate(pending_codriver_list):
+                driver_idx = int(link.get("driverRowIndex", -1))
+                rs = run_states[driver_idx]
+                mh = rs.get("merged_header") or {}
+                # 表示をドライバー行と揃える: 運行IDは「ID-」を除く、乗務員IDは6桁ゼロ埋め
+                run_id = str(mh.get("運行ID") or "").strip()
+                if run_id.startswith("ID-"):
+                    run_id = run_id[3:]
+                crew_id = str(link.get("乗務員ID") or "").strip()
+                crew_id = crew_id.zfill(6) if crew_id else ""
+                pending_rows.append({
+                    "rowIndex": n_driver + i,
+                    "運行ID": run_id,
+                    "乗務員ID": crew_id,
+                    "乗務員名": link.get("乗務員名"),
+                    "運行日": mh.get("運行日"),
+                    "出庫日時": link.get("出庫日時") or "",
+                    "帰庫日時": link.get("帰庫日時") or "",
+                })
     if pending_rows:
         inp_dir = job_input_dir(jobId)
         alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
@@ -479,6 +657,10 @@ def _after_link_decision(
             "alcoholRunsByCrew": alc_runs,
             "previousStep": came_from or "link_decision_required",
         }
+        if codriver_start_index is not None:
+            manual_data["codriverStartIndex"] = codriver_start_index
+        if codriver_pending_indices is not None:
+            manual_data["codriverPendingIndices"] = codriver_pending_indices
         if link_runs is not None:
             manual_data["linkRuns"] = link_runs
         if link_groups is not None:
@@ -530,10 +712,10 @@ def _do_merge_and_excel(
             if id1 and id2 and id1 != id2:
                 use_first = (str(pair.get("運行日を") or "first").strip().lower() in ("first", "1", "1本目"))
                 link_groups.append({"runIds": [id1, id2], "運行日を": 0 if use_first else 1})
-    run_id_to_index: Dict[str, int] = {str(r.get("運行ID") or ""): i for i, r in enumerate(new_rows)}
+    run_id_to_index: Dict[str, int] = {_normalize_run_id(str(r.get("運行ID") or "")): i for i, r in enumerate(new_rows)}
     for grp in link_groups:
         run_ids = [str(rid or "").strip() for rid in grp.get("runIds") or [] if str(rid or "").strip()]
-        run_ids = list(dict.fromkeys(run_ids))
+        run_ids = list(dict.fromkeys(run_ids))  # 同一運行ID重複を除く（二重合算防止）
         if len(run_ids) < 2:
             continue
         indices = []
@@ -541,7 +723,7 @@ def _do_merge_and_excel(
             rid_norm = _normalize_run_id(rid)
             if rid_norm in run_id_to_index:
                 indices.append(run_id_to_index[rid_norm])
-        indices = sorted(set(indices))
+        indices = sorted(set(indices))  # 同一インデックス重複を除く（二重合算防止）
         if len(indices) < 2:
             continue
         rows_grp = [new_rows[i] for i in indices]
@@ -558,7 +740,7 @@ def _do_merge_and_excel(
         i0, i_last = indices[0], indices[-1]
         run_states = run_states[:i0] + [merged_rs] + run_states[i0 + 1 : i_last] + run_states[i_last + 1 :]
         new_rows = new_rows[:i0] + [merged_row] + new_rows[i0 + 1 : i_last] + new_rows[i_last + 1 :]
-        run_id_to_index = {str(r.get("運行ID") or ""): idx for idx, r in enumerate(new_rows)}
+        run_id_to_index = {_normalize_run_id(str(r.get("運行ID") or "")): idx for idx, r in enumerate(new_rows)}
     missing = [
         {"rowIndex": i, "運行ID": r.get("運行ID"), "乗務員ID": r.get("乗務員ID"), "乗務員名": r.get("乗務員名"), "運行日": _run_date_from_row(r), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
         for i, r in enumerate(new_rows)
@@ -706,7 +888,7 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
     if not preset_path.exists():
         raise HTTPException(status_code=400, detail="プリセットが見つかりません。")
     temp_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
-    run_id_to_index: Dict[str, int] = {str(r.get("運行ID") or ""): i for i, r in enumerate(temp_rows)}
+    run_id_to_index: Dict[str, int] = {_normalize_run_id(str(r.get("運行ID") or "")): i for i, r in enumerate(temp_rows)}
     link_groups_arg: Optional[List[Dict[str, Any]]] = body.get("linkGroups")
     pairs: List[Dict[str, Any]] = []
     if link_groups_arg is not None:
@@ -900,22 +1082,69 @@ def complete_manual(jobId: str, body: Dict[str, Any] = Body(...)):
     link_pairs = data.get("linkPairs") or []
     link_groups = data.get("linkGroups")
     codriver_links = data.get("codriverLinks") or []
+    codriver_start_index = data.get("codriverStartIndex")
+    codriver_pending_indices = data.get("codriverPendingIndices")
+
+    # 同乗者行の手入力を codriver_links に反映（rowIndex >= codriver_start_index の entries）
+    if codriver_start_index is not None and codriver_links:
+        _apply_codriver_entries(
+            codriver_links, entries, int(codriver_start_index), codriver_pending_indices
+        )
+    driver_entries = entries
+    if codriver_start_index is not None:
+        try:
+            start = int(codriver_start_index)
+            driver_entries = [e for e in entries if int(e.get("rowIndex", -1)) < start]
+        except (TypeError, ValueError):
+            pass
+
+    effective_merge_sets = _normalize_merge_sets(merge_groups, merge_choices, merge_sets)
+
     if merge_groups or link_pairs or link_groups:
-        _apply_entries_to_run_states(run_states, entries, merge_groups, merge_choices, merge_sets)
+        target_run_states = run_states
+        target_entries = driver_entries
+        target_codriver_links = codriver_links
+
+        if merge_groups:
+            target_run_states, _ = apply_merge_decision(
+                run_states,
+                headers,
+                merge_groups,
+                merge_choices,
+                preset_path,
+                state.device,
+                run_date_choices,
+                merge_sets=effective_merge_sets,
+            )
+            index_map = _original_to_merged_index_map(len(run_states), effective_merge_sets)
+            target_entries = _remap_entries_row_index(driver_entries, index_map)
+            target_codriver_links = _remap_codriver_links_row_index(codriver_links, index_map)
+
+        _apply_entries_to_run_states(target_run_states, target_entries, [], [], None)
         return _do_merge_and_excel(
-            jobId, sp, state, run_states, headers,
-            merge_groups, merge_choices, run_date_choices, link_pairs, codriver_links, merge_sets,
+            jobId,
+            sp,
+            state,
+            target_run_states,
+            headers,
+            [],
+            [],
+            [],
+            link_pairs,
+            target_codriver_links,
+            None,
             link_groups=link_groups,
             from_complete_manual=True,
         )
+
     excel_path = out_dir / "output.xlsx"
     if codriver_links:
-        _apply_entries_to_run_states(run_states, entries, [], [], merge_sets)
+        _apply_entries_to_run_states(run_states, driver_entries, [], [], effective_merge_sets)
         rows = rows_from_run_states(run_states, headers, preset_path, state.device)
         rows = rows + _build_codriver_rows(rows, codriver_links)
         write_excel(headers, rows, excel_path)
     else:
-        complete_manual_input(run_states, headers, entries, preset_path, state.device, excel_path)
+        complete_manual_input(run_states, headers, driver_entries, preset_path, state.device, excel_path)
     state.status = "succeeded"
     state.pendingRows = None
     state.artifacts = Artifacts(excel=True, log=True, skipped=True)

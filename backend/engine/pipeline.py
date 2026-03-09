@@ -64,12 +64,12 @@ def _parse_dt(s: str) -> datetime:
 
 
 def _row_to_dt(v: Any) -> Optional[datetime]:
-    """行の日時項目を datetime に。None/空/解釈不可なら None。"""
+    """行の日時項目を datetime に。None/空/解釈不可なら None。全角数字・記号は NFKC で半角に正規化してから解釈。"""
     if v is None:
         return None
     if isinstance(v, datetime):
         return v
-    s = str(v).strip()
+    s = _nfkc(str(v).strip())
     if not s:
         return None
     try:
@@ -116,6 +116,45 @@ def _split_day_night_minutes(start: datetime, end: datetime) -> Tuple[int, int]:
 def _apply_regex(text: str, pattern: str, group: int = 1) -> Optional[str]:
     m = re.search(pattern, text, re.MULTILINE)
     return m.group(group).strip() if m else None
+
+
+def _extract_out_in_dt_pair(text: str, out_pattern: str, in_pattern: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    ブロック内に複数の「出庫時刻」「帰庫時刻」がある場合、同一運行の対を返す。
+    「最初の出庫」と組にする帰庫は、その出庫より後に現れる帰庫のうち、
+    拘束時間（出庫→帰庫の分）が最短になるものを採用する。
+    （正しいペアは同一運行で約数～十数時間、誤ったペアは他運行の帰庫で20時間超になるため）
+    """
+    outs: List[Tuple[int, str]] = []  # (start_pos, value)
+    for m in re.finditer(out_pattern, text, re.MULTILINE):
+        outs.append((m.start(), m.group(1).strip()))
+    ins: List[Tuple[int, str]] = []
+    for m in re.finditer(in_pattern, text, re.MULTILINE):
+        ins.append((m.start(), m.group(1).strip()))
+    if not outs:
+        return None, None
+    first_out_pos, first_out_val = outs[0]
+    if not ins:
+        return first_out_val, None
+    # 最初の出庫より後に出てくる帰庫のうち、拘束時間が最短（正の分）のものを採用
+    best_in_val: Optional[str] = None
+    best_minutes: Optional[int] = None
+    out_dt = _row_to_dt(first_out_val)
+    if out_dt is None:
+        return first_out_val, ins[0][1] if ins else None
+    for _pos, in_val in ins:
+        if _pos <= first_out_pos:
+            continue
+        in_dt = _row_to_dt(in_val)
+        if in_dt is None or in_dt <= out_dt:
+            continue
+        minutes = _minutes_between(in_dt, out_dt)
+        if best_minutes is None or minutes < best_minutes:
+            best_minutes = minutes
+            best_in_val = in_val
+    if best_in_val is not None:
+        return first_out_val, best_in_val
+    return first_out_val, None
 
 
 def _is_time_serial_col(header_name: str) -> bool:
@@ -250,8 +289,9 @@ def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any
 
         fields["出庫メーター"] = _apply_regex(cleaned_text, mout, 1)
         fields["帰庫メーター"] = _apply_regex(cleaned_text, min_, 1)
-        fields["出庫日時"] = _apply_regex(cleaned_text, outdt, 1)
-        fields["帰庫日時"] = _apply_regex(cleaned_text, indt, 1)
+        out_dt_val, in_dt_val = _extract_out_in_dt_pair(cleaned_text, outdt, indt)
+        fields["出庫日時"] = out_dt_val
+        fields["帰庫日時"] = in_dt_val
 
         # 安全点数
         score_safe = he.get("score_safe_regex")
@@ -288,8 +328,11 @@ def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any
             r"帰庫時刻[:：]\s*\d{4}/\d{1,2}/\d{1,2}\s*\d{2}:\d{2}\s*([0-9]+(?:\.[0-9]+)?)\s*km",
             1,
         )
-        fields["出庫日時"] = _apply_regex(cleaned_text, r"出庫時刻[:：]\s*(\d{4}/\d{1,2}/\d{1,2}\s*\d{2}:\d{2})", 1)
-        fields["帰庫日時"] = _apply_regex(cleaned_text, r"帰庫時刻[:：]\s*(\d{4}/\d{1,2}/\d{1,2}\s*\d{2}:\d{2})", 1)
+        _out_re = r"出庫時刻[:：]\s*(\d{4}/\d{1,2}/\d{1,2}\s*\d{2}:\d{2})"
+        _in_re = r"帰庫時刻[:：]\s*(\d{4}/\d{1,2}/\d{1,2}\s*\d{2}:\d{2})"
+        out_dt_val, in_dt_val = _extract_out_in_dt_pair(cleaned_text, _out_re, _in_re)
+        fields["出庫日時"] = out_dt_val
+        fields["帰庫日時"] = in_dt_val
 
         # 安全点数
         score_safe = he.get("score_safe_regex")
@@ -670,14 +713,14 @@ def apply_merge_decision(
 
     rows = [row_from_run_state(rs) for rs in run_states]
 
-    # row_index -> (group_idx, sorted_set) のうち len(set)>=2 のものだけ
+    # row_index -> (group_idx, sorted_set) のうち len(set)>=2 のものだけ。同一インデックス重複は除く（二重合算防止）
     row_to_merge: Dict[int, Tuple[int, List[int]]] = {}
     for gi, sets in enumerate(merge_sets):
         for s in sets:
-            if len(s) >= 2:
-                sorted_s = sorted(s)
-                for idx in sorted_s:
-                    row_to_merge[idx] = (gi, sorted_s)
+            unique_s = sorted(set(s))
+            if len(unique_s) >= 2:
+                for idx in unique_s:
+                    row_to_merge[idx] = (gi, unique_s)
 
     new_run_states: List[Dict[str, Any]] = []
     for i in range(len(run_states)):
@@ -728,6 +771,10 @@ def apply_alcohol_to_run_states(
         mh["出庫日時"] = format_dt_for_excel(out_matched)
         mh["帰庫日時"] = format_dt_for_excel(in_matched)
 
+        # ここが重要:
+        # アルコール時刻で header を上書きしたら、
+        # 以前の merged_row は時刻と計算値がズレるので必ず破棄する
+        rs["merged_row"] = None
 
 def rows_from_run_states(
     run_states: List[Dict[str, Any]],
@@ -737,19 +784,40 @@ def rows_from_run_states(
 ) -> List[Dict[str, Any]]:
     """run_states から Excel 行のリストを復元する（出庫・帰庫未取得判定などに使用）。"""
     preset = _load_preset(preset_path)
-    ctx = {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""}
+    ctx = {
+        "timestamp": "",
+        "company": "",
+        "device_type": device,
+        "report_id": "",
+        "pdf_filename": "",
+        "level": "",
+        "category": "",
+        "field_name": "",
+        "value_candidates": "",
+        "message": "",
+    }
 
     def row_from_run_state(rs: Dict[str, Any]) -> Dict[str, Any]:
         merged_header = dict(rs.get("merged_header") or {})
-        if rs.get("merged_row"):
-            return dict(rs["merged_row"])
         merged_details = rs.get("merged_details") or []
+
+        cached_row = rs.get("merged_row")
+        if cached_row:
+            # キャッシュが header と一致している時だけ使う
+            if (
+                (cached_row.get("出庫日時") == merged_header.get("出庫日時"))
+                and (cached_row.get("帰庫日時") == merged_header.get("帰庫日時"))
+            ):
+                return dict(cached_row)
+
         metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
         row = {**merged_header, **metrics}
+
         if device in ("telecom", "mimamori") and row.get("運行ID"):
             rid = str(row["運行ID"])
             if rid.startswith("ID-"):
                 row["運行ID"] = rid[3:]
+
         return row
 
     return [row_from_run_state(rs) for rs in run_states]
@@ -1094,14 +1162,27 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
                 "start": start, "end": end, "start_dt": start_dt, "end_dt": end_dt,
                 "is_gap": False,
             })
+    # 運行間時間の扱い
+    # - 3時間以上: 分割休息候補に入れる
+    # - 3時間未満: 休憩時間_分割前 に直接加算する
+    extra_gap_break_day = 0
+    extra_gap_break_night = 0
+
     for g in gap_segments:
         if g["dur"] >= REST_THRESHOLD_MINUTES:
             candidates.append({
-                "dur": g["dur"], "day_min": g["day_min"], "night_min": g["night_min"],
-                "start": g["start"], "end": g["end"],
-                "start_dt": g["start"], "end_dt": g["end"],
+                "dur": g["dur"],
+                "day_min": g["day_min"],
+                "night_min": g["night_min"],
+                "start": g["start"],
+                "end": g["end"],
+                "start_dt": g["start"],
+                "end_dt": g["end"],
                 "is_gap": True,
             })
+        else:
+            extra_gap_break_day += g["day_min"]
+            extra_gap_break_night += g["night_min"]
 
     # 上位2つを分割①・②に
     candidates.sort(key=lambda x: x["dur"], reverse=True)
@@ -1117,37 +1198,53 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         merged_row[f"分割終了{i}"] = en
         merged_row[f"分割{i}_作業時間_分"] = c["dur"]
 
-    # 休息（AK~AM）は分割①②の2つだけとする。分割から外れた区間は休息から除き休憩（AE~AG）に加算
+    # 休息（AK~AM）は分割①②の2つだけとする
     rest_day = sum(c["day_min"] for c in top2)
     rest_night = sum(c["night_min"] for c in top2)
     merged_row["休息時間"] = rest_day + rest_night
     merged_row["休息時間_昼"] = rest_day
     merged_row["休息時間_夜"] = rest_night
 
-    # 分割から外れた区間（それ以外）はすべて休憩時間_分割前に加算
-    # 運行間（is_gap）: 3h未満でも3h以上で分割に採用されなかった場合も
-    # 通常の分割から外れた区間（not is_gap）も同様に休憩時間_分割前に加算
+    # 分割から外れた区間 + 3時間未満の運行間時間 は休憩時間_分割前に加算
     fallen = candidates[2:]
     extra_keikai_pre_day, extra_keikai_pre_night = 0, 0
     for c in fallen:
         extra_keikai_pre_day += c["day_min"]
         extra_keikai_pre_night += c["night_min"]
-    merged_row["休憩時間_分割前"] = num_val(merged_row, "休憩時間_分割前") + extra_keikai_pre_day + extra_keikai_pre_night
-    merged_row["休憩時間_昼_分割前"] = num_val(merged_row, "休憩時間_昼_分割前") + extra_keikai_pre_day
-    merged_row["休憩時間_夜_分割前"] = num_val(merged_row, "休憩時間_夜_分割前") + extra_keikai_pre_night
 
-    # 安全点数: 平均して四捨五入
+    extra_keikai_pre_day += extra_gap_break_day
+    extra_keikai_pre_night += extra_gap_break_night
+
+    merged_row["休憩時間_分割前"] = (
+        num_val(merged_row, "休憩時間_分割前")
+        + extra_keikai_pre_day
+        + extra_keikai_pre_night
+    )
+    merged_row["休憩時間_昼_分割前"] = (
+        num_val(merged_row, "休憩時間_昼_分割前")
+        + extra_keikai_pre_day
+    )
+    merged_row["休憩時間_夜_分割前"] = (
+        num_val(merged_row, "休憩時間_夜_分割前")
+        + extra_keikai_pre_night
+    )
+
+    # 安全点数: 平均して四捨五入（1件でもあれば採用、なければ先頭行から転記）
     safe_scores = [float_val(r, "安全点数") for r in rows if r.get("安全点数") not in (None, "")]
     if safe_scores:
         merged_row["安全点数"] = round(sum(safe_scores) / len(safe_scores))
     else:
-        merged_row["安全点数"] = first.get("安全点数")
+        # 数値化できなかった場合も、いずれかの行に値があれば転記する（みまもり等で合算時に欠落しないように）
+        merged_row["安全点数"] = next(
+            (r.get("安全点数") for r in rows if r.get("安全点数") not in (None, "")),
+            first.get("安全点数"),
+        )
 
     # 同一運行まとめ行で転記しない列は None にし、Excel では空白になる
     for col in _MERGE_BLANK_COLUMNS:
         merged_row[col] = None
 
-    # merged_run_state: 統合行を再計算に使うため merged_header + merged_details
+    # merged_run_state: 統合行を再計算に使うため merged_header + merged_details（安全点数も持たせておく）
     first_rs = run_states[0]
     merged_header = {
         "運行ID": merged_row["運行ID"],
@@ -1162,6 +1259,7 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         "帰庫メーター": merged_row["帰庫メーター"],
         "出庫日時": merged_row["出庫日時"],
         "帰庫日時": merged_row["帰庫日時"],
+        "安全点数": merged_row.get("安全点数"),
     }
     # 3時間以上紐づけのドロップダウン表示用：統合元のデジタコ出庫・帰庫の min/max を退避
     out_digitaco_dts = []
