@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -19,6 +20,23 @@ from .alcohol_integration import (
 import pdfplumber
 from openpyxl import Workbook
 from openpyxl.styles import Font
+
+# 運転時間比較ログ用ファイル（_merge_runs 直後 vs rows_from_run_states 再計算後）
+_DRIVE_COMPARE_LOG_PATH = Path(__file__).resolve().parents[1] / "work" / "drive_compare.log"
+_drive_compare_logger: Optional[logging.Logger] = None
+
+
+def _get_drive_compare_logger() -> logging.Logger:
+    global _drive_compare_logger
+    if _drive_compare_logger is not None:
+        return _drive_compare_logger
+    _drive_compare_logger = logging.getLogger("engine.pipeline.drive_compare")
+    _drive_compare_logger.setLevel(logging.INFO)
+    _DRIVE_COMPARE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    h = logging.FileHandler(_DRIVE_COMPARE_LOG_PATH, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _drive_compare_logger.addHandler(h)
+    return _drive_compare_logger
 
 
 # =========================
@@ -346,6 +364,19 @@ def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any
             except Exception:
                 pass
 
+    # 走行状態の次の時刻（H:MM）を分で取得。1運行1つなのでここで取れば運転時間として合算可能
+    drive_re = (preset.get("header_extract") or {}).get("drive_time_regex")
+    if not drive_re:
+        drive_re = r"走行状態\s*[:：]?\s*(\d{1,2}):(\d{2})"
+    m = re.search(drive_re, cleaned_text)
+    if m:
+        try:
+            h, mn = int(m.group(1)), int(m.group(2))
+            if 0 <= h < 24 and 0 <= mn < 60:
+                fields["走行状態_分"] = h * 60 + mn
+        except (ValueError, IndexError):
+            pass
+
     return fields
 
 
@@ -465,7 +496,14 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
     out_dt = _parse_dt(out_dt_s)
     in_dt = _parse_dt(in_dt_s)
 
-    detail_rows_sorted = sorted(detail_rows, key=lambda r: r["item"])
+    def _detail_sort_key(r: Dict[str, Any]):
+        if r.get("_merge_seq") is not None:
+            return (0, int(r["_merge_seq"]))
+        item = r.get("item")
+        item = item if isinstance(item, int) else 10**9
+        return (1, item, r.get("arrival") or "99:99", r.get("depart") or "99:99")
+
+    detail_rows_sorted = sorted(detail_rows, key=_detail_sort_key)
     seq = _build_datetime_sequence(out_dt, detail_rows_sorted)
 
     # 総走行距離 = 帰庫 - 出庫
@@ -481,27 +519,33 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
     # 拘束時間の昼/夜内訳（5:00-22:00=昼、22:00-5:00=夜）
     bind_day, bind_night = _split_day_night_minutes(out_dt, in_dt)
 
-    # 運転時間（分）
-    drive_min = 0
-    prev_depart: Optional[datetime] = out_dt  # 直前出発（初期は出庫日時）
+    # 運転時間（分）：PDFの「走行状態」の次の時刻を優先。無い場合は明細シーケンスから算出
+    drive_min: Optional[int] = None
+    if header.get("走行状態_分") is not None:
+        try:
+            v = header["走行状態_分"]
+            drive_min = int(v) if isinstance(v, (int, float)) else int(float(str(v).strip()))
+            if drive_min < 0:
+                drive_min = 0
+        except (ValueError, TypeError):
+            pass
+    if drive_min is None:
+        drive_min = 0
+        prev_depart: Optional[datetime] = out_dt
 
-    for s in seq:
-        # 到着 - 直前出発 を加算（到着がある行だけ）
-        if s["arr_dt"] is not None and prev_depart is not None:
-            if s["arr_dt"] >= prev_depart:
-                drive_min += _minutes_between(s["arr_dt"], prev_depart)
+        for s in seq:
+            if s["arr_dt"] is not None and prev_depart is not None:
+                if s["arr_dt"] >= prev_depart:
+                    drive_min += _minutes_between(s["arr_dt"], prev_depart)
+            if s["task"] == "出庫" and s["arr_dt"] is not None and s["dep_dt"] is None:
+                prev_depart = s["arr_dt"]
+            elif s["task"] == "帰庫" and s["arr_dt"] is not None and s["dep_dt"] is None:
+                prev_depart = s["arr_dt"]
+            elif s["dep_dt"] is not None:
+                prev_depart = s["dep_dt"]
 
-        # prev_depart 更新ルール（B案：帰庫到着だけでも更新し二重加算を防ぐ）
-        if s["task"] == "出庫" and s["arr_dt"] is not None and s["dep_dt"] is None:
-            prev_depart = s["arr_dt"]
-        elif s["task"] == "帰庫" and s["arr_dt"] is not None and s["dep_dt"] is None:
-            prev_depart = s["arr_dt"]
-        elif s["dep_dt"] is not None:
-            prev_depart = s["dep_dt"]
-
-    # 最後：直前出発があれば「帰庫到着 - 直前出発」を運転時間へ
-    if prev_depart is not None and in_dt >= prev_depart:
-        drive_min += _minutes_between(in_dt, prev_depart)
+        if prev_depart is not None and in_dt >= prev_depart:
+            drive_min += _minutes_between(in_dt, prev_depart)
 
     # 待機時間（分）
     wait_min = 0
@@ -601,6 +645,20 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
     return out
 
 
+def _apply_merged_drive_override(row: Dict[str, Any], merged_header: Dict[str, Any]) -> None:
+    """統合行の運転時間を _merge_runs 直後の値に戻す。再計算で膨張するのを防ぐ。"""
+    v = merged_header.get("_merged_drive_min_initial")
+    if v is None:
+        return
+    try:
+        n = int(v)
+        if n >= 0:
+            row["運転時間"] = n
+    except (TypeError, ValueError):
+        pass
+    row.pop("_merged_drive_min_initial", None)
+
+
 # =========================
 # 手入力完了: 入力値で再計算して Excel 出力
 # =========================
@@ -642,6 +700,7 @@ def complete_manual_input(
             ctx = {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""}
             metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
             row = {**merged_header, **metrics}
+            _apply_merged_drive_override(row, merged_header)
         else:
             merged_header = dict(run["merged_header"])
             if e is not None:
@@ -657,6 +716,7 @@ def complete_manual_input(
                 ctx = {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""}
                 metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
                 row = {**merged_header, **metrics}
+                _apply_merged_drive_override(row, merged_header)
         if device in ("telecom", "mimamori") and row.get("運行ID"):
             rid = str(row["運行ID"])
             if rid.startswith("ID-"):
@@ -713,14 +773,24 @@ def apply_merge_decision(
 
     rows = [row_from_run_state(rs) for rs in run_states]
 
-    # row_index -> (group_idx, sorted_set) のうち len(set)>=2 のものだけ。同一インデックス重複は除く（二重合算防止）
-    row_to_merge: Dict[int, Tuple[int, List[int]]] = {}
+    # merge_sets の overlap を除去：同じ rowIndex が複数 set に入っていると同一運行が二重計上されるため、先に出た set に属するインデックスは後続から除外する
+    used_indices: set = set()
+    effective_sets: List[Tuple[int, List[int]]] = []
     for gi, sets in enumerate(merge_sets):
         for s in sets:
             unique_s = sorted(set(s))
-            if len(unique_s) >= 2:
-                for idx in unique_s:
-                    row_to_merge[idx] = (gi, unique_s)
+            if len(unique_s) < 2:
+                continue
+            remaining = [idx for idx in unique_s if idx not in used_indices]
+            if len(remaining) >= 2:
+                effective_sets.append((gi, remaining))
+                used_indices.update(remaining)
+
+    # row_index -> (group_idx, sorted_set)。各インデックスは高々1つの set にのみ属する
+    row_to_merge: Dict[int, Tuple[int, List[int]]] = {}
+    for gi, set_list in effective_sets:
+        for idx in set_list:
+            row_to_merge[idx] = (gi, set_list)
 
     new_run_states: List[Dict[str, Any]] = []
     for i in range(len(run_states)):
@@ -812,6 +882,26 @@ def rows_from_run_states(
 
         metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
         row = {**merged_header, **metrics}
+
+        # 統合行は _merge_runs 直後の運転時間を使う。再計算すると運行間ギャップを拾って膨張するため上書きしない
+        prev_drive = merged_header.get("_merged_drive_min_initial")
+        if prev_drive is not None:
+            new_drive = metrics.get("運転時間")
+            try:
+                new_int = int(new_drive) if new_drive is not None else None
+            except (TypeError, ValueError):
+                new_int = None
+            try:
+                prev_int = int(prev_drive)
+            except (TypeError, ValueError):
+                prev_int = None
+            _get_drive_compare_logger().info(
+                "DRIVE_COMPARE run_id=%s initial=%s recomputed=%s (using initial)",
+                merged_header.get("運行ID"),
+                prev_int,
+                new_int,
+            )
+            _apply_merged_drive_override(row, merged_header)
 
         if device in ("telecom", "mimamori") and row.get("運行ID"):
             rid = str(row["運行ID"])
@@ -1260,6 +1350,8 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         "出庫日時": merged_row["出庫日時"],
         "帰庫日時": merged_row["帰庫日時"],
         "安全点数": merged_row.get("安全点数"),
+        # _merge_runs 直後の運転時間（分）。後続で rows_from_run_states() による再計算が入ったか比較するためのログ用。
+        "_merged_drive_min_initial": merged_row.get("運転時間"),
     }
     # 3時間以上紐づけのドロップダウン表示用：統合元のデジタコ出庫・帰庫の min/max を退避
     out_digitaco_dts = []
@@ -1282,8 +1374,17 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         merged_header["_digitaco_帰庫日時"] = format_dt_for_excel(max(in_digitaco_dts))
 
     all_details: List[Dict[str, Any]] = []
-    for rs in run_states:
-        all_details.extend(rs.get("merged_details") or [])
+    seq_no = 0
+    for run_order, rs in enumerate(run_states):
+        details = rs.get("merged_details") or []
+        for detail_order, d in enumerate(details):
+            nd = dict(d)
+            nd["_merge_run_order"] = run_order
+            nd["_merge_detail_order"] = detail_order
+            nd["_merge_seq"] = seq_no
+            seq_no += 1
+            all_details.append(nd)
+
     merged_run_state = {
         "report_id": first_rs.get("report_id"),
         "merged_header": merged_header,

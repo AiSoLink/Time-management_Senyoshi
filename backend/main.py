@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import copy
 import json
+import logging
 import re
 import shutil
 import sys
@@ -49,7 +51,7 @@ def _link_runs_after_merge(
     preset_path: Path,
     device: str,
 ) -> List[Dict[str, Any]]:
-    """3時間未満マージ適用後の運行だけを返す。3時間以上画面の linkRuns 用（マージで消えた運行は出さない）。"""
+    """3時間未満マージ適用後の運行だけを返す。3時間以上画面の linkRuns 用（マージで消えた運行は出さない）。表示用のため run_states はコピーで渡し本番状態を変えない。"""
     if not run_states or not headers or not preset_path.exists():
         return []
     if merge_sets is None:
@@ -59,7 +61,7 @@ def _link_runs_after_merge(
             for i, r in enumerate(link_rows)
         ]
     _, new_rows = apply_merge_decision(
-        run_states, headers, merge_groups, [], preset_path, device,
+        copy.deepcopy(run_states), headers, merge_groups, [], preset_path, device,
         run_date_choices, merge_sets=merge_sets,
     )
     return [
@@ -75,6 +77,37 @@ def _link_runs_after_merge(
     ]
 
 
+
+
+def _resolve_link_group_row_indices(
+    link_runs: List[Dict[str, Any]],
+    run_ids: List[str],
+) -> List[int]:
+    """3時間以上紐づけ画面の linkRuns を基準に、runIds を rowIndex の配列へ解決する。"""
+    by_run_id: Dict[str, List[int]] = {}
+    for r in link_runs:
+        rid = _normalize_run_id(str(r.get("運行ID") or ""))
+        if not rid:
+            continue
+        by_run_id.setdefault(rid, []).append(int(r.get("rowIndex", -1)))
+
+    resolved: List[int] = []
+    for rid in run_ids:
+        rid_norm = _normalize_run_id(rid)
+        candidates = [i for i in by_run_id.get(rid_norm, []) if i >= 0]
+        if not candidates:
+            raise HTTPException(status_code=400, detail=f"無効な運行IDです: {rid}")
+        if len(candidates) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=f"運行IDが一意に特定できません。rowIndex で選択する実装にするか、運行ID重複を解消してください: {rid}",
+            )
+        resolved.append(candidates[0])
+
+    resolved = sorted(set(resolved))
+    if len(resolved) < 2:
+        raise HTTPException(status_code=400, detail=f"各グループは2本以上の運行を指定してください。runIds={run_ids}")
+    return resolved
 def _apply_entries_to_run_states(
     run_states: List[Dict[str, Any]],
     entries: List[Dict[str, Any]],
@@ -714,18 +747,24 @@ def _do_merge_and_excel(
                 link_groups.append({"runIds": [id1, id2], "運行日を": 0 if use_first else 1})
     run_id_to_index: Dict[str, int] = {_normalize_run_id(str(r.get("運行ID") or "")): i for i, r in enumerate(new_rows)}
     for grp in link_groups:
-        run_ids = [str(rid or "").strip() for rid in grp.get("runIds") or [] if str(rid or "").strip()]
-        run_ids = list(dict.fromkeys(run_ids))  # 同一運行ID重複を除く（二重合算防止）
+        # 対策3: 行番号ではなく運行IDで統合対象を再解決する
+        run_ids = [str(rid or "").strip() for rid in (grp.get("runIds") or []) if str(rid or "").strip()]
+        run_ids = list(dict.fromkeys(run_ids))
         if len(run_ids) < 2:
             continue
-        indices = []
+        indices: List[int] = []
         for rid in run_ids:
             rid_norm = _normalize_run_id(rid)
             if rid_norm in run_id_to_index:
                 indices.append(run_id_to_index[rid_norm])
-        indices = sorted(set(indices))  # 同一インデックス重複を除く（二重合算防止）
+        indices = sorted(set(indices))
+
         if len(indices) < 2:
-            continue
+            raise HTTPException(
+                status_code=400,
+                detail=f"3時間以上紐づけ対象の解決に失敗しました: runIds={run_ids}, resolvedIndices={indices}",
+            )
+
         rows_grp = [new_rows[i] for i in indices]
         states_grp = [run_states[i] for i in indices]
         order = sorted(range(len(rows_grp)), key=lambda k: (rows_grp[k].get("出庫日時") or "") or "0")
@@ -737,9 +776,24 @@ def _do_merge_and_excel(
             merged_row["運行日"] = rows_grp[date_idx].get("運行日")
             merged_rs["merged_row"]["運行日"] = merged_row["運行日"]
             merged_rs["merged_header"]["運行日"] = merged_row["運行日"]
-        i0, i_last = indices[0], indices[-1]
-        run_states = run_states[:i0] + [merged_rs] + run_states[i0 + 1 : i_last] + run_states[i_last + 1 :]
-        new_rows = new_rows[:i0] + [merged_row] + new_rows[i0 + 1 : i_last] + new_rows[i_last + 1 :]
+
+        # 選択された行をすべて除去し、1行の統合結果に置き換える（スライスだと中間行が残るためループで明示的に除去）
+        selected = set(indices)
+        inserted = False
+        next_run_states: List[Dict[str, Any]] = []
+        next_new_rows: List[Dict[str, Any]] = []
+        for idx, (rs, row) in enumerate(zip(run_states, new_rows)):
+            if idx in selected:
+                if not inserted:
+                    next_run_states.append(merged_rs)
+                    next_new_rows.append(merged_row)
+                    inserted = True
+                continue
+            next_run_states.append(rs)
+            next_new_rows.append(row)
+
+        run_states = next_run_states
+        new_rows = next_new_rows
         run_id_to_index = {_normalize_run_id(str(r.get("運行ID") or "")): idx for idx, r in enumerate(new_rows)}
     missing = [
         {"rowIndex": i, "運行ID": r.get("運行ID"), "乗務員ID": r.get("乗務員ID"), "乗務員名": r.get("乗務員名"), "運行日": _run_date_from_row(r), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
@@ -887,28 +941,54 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
     preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
     if not preset_path.exists():
         raise HTTPException(status_code=400, detail="プリセットが見つかりません。")
-    temp_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
-    run_id_to_index: Dict[str, int] = {_normalize_run_id(str(r.get("運行ID") or "")): i for i, r in enumerate(temp_rows)}
-    link_groups_arg: Optional[List[Dict[str, Any]]] = body.get("linkGroups")
+    # 画面表示と同じ基準（3時間未満マージ後）で検証用一覧を作り、
+    # UI で選ばれた運行を rowIndex（post-merge の安定キー）へ解決して保存する。
+    link_runs_for_validation = _link_runs_after_merge(
+        run_states,
+        headers,
+        merge_groups,
+        merge_sets,
+        run_date_choices,
+        preset_path,
+        state.device,
+    )
+
+    raw_link_groups_arg: Optional[List[Dict[str, Any]]] = body.get("linkGroups")
+    link_groups_arg: Optional[List[Dict[str, Any]]] = None
     pairs: List[Dict[str, Any]] = []
-    if link_groups_arg is not None:
-        for grp in link_groups_arg:
+
+    if raw_link_groups_arg is not None:
+        resolved_groups: List[Dict[str, Any]] = []
+        for grp in raw_link_groups_arg:
             run_ids = [str(rid or "").strip() for rid in (grp.get("runIds") or []) if str(rid or "").strip()]
             run_ids = list(dict.fromkeys(run_ids))
-            if len(run_ids) < 2:
-                raise HTTPException(status_code=400, detail="各グループは2本以上の運行を指定してください。")
-            for rid in run_ids:
-                if _normalize_run_id(rid) not in run_id_to_index:
-                    raise HTTPException(status_code=400, detail=f"無効な運行IDです: {rid}")
+            indices = _resolve_link_group_row_indices(link_runs_for_validation, run_ids)
+            # 運行IDだけでなく post-merge の rowIndex を保存し、最終 merge 時の解決ズレを防ぐ
+            resolved_groups.append({
+                "runIds": run_ids,
+                "runRowIndices": indices,
+                "運行日を": int(grp.get("運行日を") or 0),
+            })
+        link_groups_arg = resolved_groups
         pairs = []
     else:
-        pairs = body.get("pairs") or []
-        for pair in pairs:
+        raw_pairs = body.get("pairs") or []
+        resolved_groups = []
+        pairs = raw_pairs
+        for pair in raw_pairs:
             id1 = str(pair.get("運行ID1") or "").strip()
             id2 = str(pair.get("運行ID2") or "").strip()
-            n1, n2 = _normalize_run_id(id1), _normalize_run_id(id2)
-            if n1 not in run_id_to_index or n2 not in run_id_to_index or n1 == n2:
+            if not id1 or not id2 or _normalize_run_id(id1) == _normalize_run_id(id2):
                 raise HTTPException(status_code=400, detail=f"無効なペアです: 運行ID {id1} と {id2}")
+            run_ids = [id1, id2]
+            indices = _resolve_link_group_row_indices(link_runs_for_validation, run_ids)
+            use_first = str(pair.get("運行日を") or "first").strip().lower() in ("first", "1", "1本目")
+            resolved_groups.append({
+                "runIds": run_ids,
+                "runRowIndices": indices,
+                "運行日を": 0 if use_first else 1,
+            })
+        link_groups_arg = resolved_groups
     inp_dir = job_input_dir(jobId)
     alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
     if alcohol_events:
@@ -965,6 +1045,7 @@ def complete_codriver_skip(jobId: str):
     merge_sets = data.get("mergeSets")
     run_date_choices = data.get("runDateChoices") or []
     link_pairs = data.get("linkPairs") or []
+    link_groups = data.get("linkGroups")
     if not run_states or not headers:
         raise HTTPException(status_code=400, detail="手入力状態が不正です。")
     preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
@@ -978,6 +1059,7 @@ def complete_codriver_skip(jobId: str):
     return _after_link_decision(
         jobId, sp, state, run_states, headers, new_rows,
         merge_groups, merge_choices, run_date_choices, link_pairs, [], merge_sets=merge_sets, came_from="codriver_link_required",
+        link_groups=link_groups,
         link_runs=data.get("linkRuns"),
     )
 
@@ -1003,6 +1085,7 @@ def complete_codriver_link(jobId: str, body: Dict[str, Any] = Body(...)):
     merge_sets = data.get("mergeSets")
     run_date_choices = data.get("runDateChoices") or []
     link_pairs = data.get("linkPairs") or []
+    link_groups = data.get("linkGroups")
     alcohol_only_crew = data.get("alcoholOnlyCrew") or []
     if not run_states or not headers:
         raise HTTPException(status_code=400, detail="手入力状態が不正です。")
@@ -1031,9 +1114,18 @@ def complete_codriver_link(jobId: str, body: Dict[str, Any] = Body(...)):
             "帰庫日時": r.get("帰庫日時") or "",
             "driverRowIndex": driver_row_index,
         })
-    manual_data = {"run_states": run_states, "headers": headers, "mergeGroups": merge_groups, "runDateChoices": run_date_choices, "linkPairs": link_pairs, "codriverLinks": resolved}
+    manual_data = {
+        "run_states": run_states,
+        "headers": headers,
+        "mergeGroups": merge_groups,
+        "runDateChoices": run_date_choices,
+        "linkPairs": link_pairs,
+        "codriverLinks": resolved,
+    }
     if data.get("linkRuns") is not None:
         manual_data["linkRuns"] = data["linkRuns"]
+    if link_groups is not None:
+        manual_data["linkGroups"] = link_groups
     if merge_sets is not None:
         manual_data["mergeSets"] = merge_sets
     else:
@@ -1047,6 +1139,7 @@ def complete_codriver_link(jobId: str, body: Dict[str, Any] = Body(...)):
     return _after_link_decision(
         jobId, sp, state, run_states, headers, new_rows,
         merge_groups, merge_choices, run_date_choices, link_pairs, resolved, merge_sets=merge_sets, came_from="codriver_link_required",
+        link_groups=link_groups,
         link_runs=data.get("linkRuns"),
     )
 
@@ -1121,6 +1214,29 @@ def complete_manual(jobId: str, body: Dict[str, Any] = Body(...)):
             target_codriver_links = _remap_codriver_links_row_index(codriver_links, index_map)
 
         _apply_entries_to_run_states(target_run_states, target_entries, [], [], None)
+
+        # 手入力経由では link_groups の runRowIndices が無い/ずれている場合があるので、post-merge 行一覧で再解決する
+        if link_groups:
+            _rows_after_merge = rows_from_run_states(target_run_states, headers, preset_path, state.device)
+            run_id_to_idx = {_normalize_run_id(str(r.get("運行ID") or "")): i for i, r in enumerate(_rows_after_merge)}
+            for grp in link_groups:
+                if grp.get("runRowIndices") is not None and len(grp.get("runRowIndices") or []) >= 2:
+                    _indices = [int(i) for i in (grp.get("runRowIndices") or []) if 0 <= int(i) < len(_rows_after_merge)]
+                    if len(_indices) >= 2:
+                        continue
+                run_ids = [str(rid or "").strip() for rid in (grp.get("runIds") or []) if str(rid or "").strip()]
+                run_ids = list(dict.fromkeys(run_ids))
+                if len(run_ids) < 2:
+                    continue
+                indices = []
+                for rid in run_ids:
+                    rid_norm = _normalize_run_id(rid)
+                    if rid_norm in run_id_to_idx:
+                        indices.append(run_id_to_idx[rid_norm])
+                indices = sorted(set(indices))
+                if len(indices) >= 2:
+                    grp["runRowIndices"] = indices
+
         return _do_merge_and_excel(
             jobId,
             sp,
