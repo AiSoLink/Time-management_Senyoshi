@@ -1,0 +1,78 @@
+/* 時間管理システム - 共通スタイル */
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+}
+.container {
+  padding: 16px;
+  max-width: 980px;
+  margin: 0 auto;
+}
+h1 { margin: 8px 0 16px; }
+h2 { margin-top: 16px; }
+h3 { margin-top: 12px; }
+.err { color: crimson; }
+.section-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.btn-primary {
+  padding: 8px 16px;
+  border: 1px solid #1976d2;
+  background: #e3f2fd;
+  color: #1565c0;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.btn-secondary {
+  padding: 8px 16px;
+  border: 1px solid #666;
+  background: #f5f5f5;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.btn-primary:disabled, .btn-secondary:disabled { opacity: 0.7; cursor: not-allowed; }
+.link-card {
+  display: inline-block;
+  padding: 10px 12px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+}
+.link-card:hover { background: #f0f0f0; }
+.back-home { margin-top: 24px; }
+.back-home a {
+  padding: 8px 12px;
+  border: 1px solid #444;
+  border-radius: 8px;
+  text-decoration: none;
+  color: inherit;
+  display: inline-block;
+}
+.back-home a:hover { background: #f0f0f0; }
+table.data-table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: auto;
+}
+table.data-table th, table.data-table td {
+  border: 1px solid #ccc;
+  padding: 6px 8px;
+  text-align: left;
+}
+table.data-table th { background: #f5f5f5; }
+input[type="text"], input[type="number"], select {
+  padding: 4px 8px;
+  font-size: 14px;
+}
+.progress-bar {
+  height: 24px;
+  background-color: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.progress-bar-inner {
+  height: 100%;
+  background-color: #1976d2;
+  transition: width 0.3s ease;
+}
