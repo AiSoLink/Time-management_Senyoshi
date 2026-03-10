@@ -1,217 +1,200 @@
 # 時間管理システム（デジタコ・アルコール紐づけ）
 
-デジタルタコグラフ（デジタコ）のPDF・対面データ・アルコール検知データをアップロードし、運行ごとの集計Excelを出力するWebアプリです。  
-**フロントエンドは静的HTML/CSS/JavaScript（`web/`）で、バックエンドはPython（FastAPI）で動作します。**
+デジタコのPDFとアルコール検知データをアップロードすると、**運行ごとの集計Excel**を作成するWebアプリです。
 
 ---
 
-## 機能概要
+## 📌 このREADMEの見方
 
-1. **会社・機種の選択**  
-   会社を選択し、みまもり／テレコムなど機種（デバイス）を選びます。
-
-2. **ファイルアップロード（3) 実行）**  
-   - **デジタコ**: PDF（複数可）  
-   - **対面**: 対面データ（CSV等、複数可）  
-   - **アルキラーNEX**: アルコール検知データ（複数可）  
-
-3. **処理フロー（4) 結果）**  
-   - **3時間未満の紐づけ**: 同一乗務員で「帰庫→出庫」が3時間未満の運行を「まとめる／まとめない」を選択  
-   - **3時間以上の紐づけ**: 3時間以上空いている運行を「1本にまとめる」グループを指定（検索・複数選択対応）  
-   - **同乗者紐づけ**: デジタコがなくアルコールのみの乗務員について「誰と添乗したか」を運行で選択（検索対応）  
-   - **アルコールとデジタコの紐づけ**: 出庫・帰庫が取れなかった行の日時を手入力  
-   - **完了**: Excelダウンロード（手入力画面の「ダウンロード」で取得）
+- **「とりあえず動かしたい」** → [クイックスタート](#-クイックスタート) だけ見ればOKです。
+- **「中身をいじって開発したい」** → [開発の始め方](#-開発の始め方) と [フォルダの役割](#-フォルダの役割) を読んでください。
+- **「exeにして配布したい」** → [exe化の手順](#-exe化して配布する) を参照してください。
 
 ---
 
-## 技術構成
+## 🎯 このアプリでできること（1行で）
 
-| 役割 | 技術 | 場所 |
-|------|------|------|
-| フロントエンド | 静的HTML / CSS / JavaScript | `web/` |
-| バックエンド | Python 3, FastAPI, Uvicorn | `backend/` |
-| PDF解析・Excel出力 | pdfplumber, openpyxl, pipeline | `backend/engine/` |
-| 会社×機種プリセット | JSON | `backend/companies/<会社名>/` |
-
-- バックエンドが **ルート（`/`）で `web/` を静的配信**し、**`/api/*` でAPI**を提供します。  
-- フロントは Node.js（Next.js）から **静的HTMLフロントに変更**しています（`frontend/` は旧フロントの残りです）。
+**デジタコPDF・対面データ・アルコールデータを入れると、運行単位で集計したExcelを出してくれる。**
 
 ---
 
-## 必要な環境
+## ⚡ クイックスタート（最短で動かす）
 
-- **Python 3.10 以上**（推奨: 3.11+）
-- **pip** でパッケージインストール
+「とりあえず画面を開いてみたい」ときは、次の2ステップです。
 
----
+### 1. リポジトリを手元に用意する
 
-## セットアップと起動
-
-### 1. リポジトリのクローン
-
-```bash
-git clone <リポジトリURL>
-cd <リポジトリ名>
+```powershell
+git clone https://github.com/AiSoLink/Time-management_Senyoshi.git
+cd Time-management_Senyoshi
 ```
 
-### 2. バックエンドの起動（これだけでフロントも利用可能）
+（すでにクローン済みの場合は、上記の `cd Time-management_Senyoshi` まででフォルダに入れればOKです。）
 
-**PowerShell（推奨）:**
+### 2. バックエンドを起動する
+
+**PowerShell** を開き、次を実行します。
 
 ```powershell
 cd backend
 .\run_backend.ps1
 ```
 
-- 初回は仮想環境（`.venv`）作成と `pip install -r requirements.txt` が実行されます。  
-- 起動後は **http://127.0.0.1:8000** でアクセスできます。  
-- ルート（`/`）で `web/index.html` が表示され、会社選択 → 機種選択 → 実行（アップロード）→ 結果 の流れで利用できます。
+- 初回は自動で「仮想環境」を作り、必要なライブラリを入れます（数分かかることがあります）。
+- 問題なく起動すると、**http://127.0.0.1:8000** と表示されます。
 
-**手動で起動する場合:**
+### 3. ブラウザで開く
+
+ブラウザのアドレス欄に **http://127.0.0.1:8000** を入力して開きます。
+
+- 会社を選ぶ → 機種を選ぶ → PDF等をアップロード → 画面の指示に従って進めると、最後にExcelをダウンロードできます。
+
+**以上で「動かす」ところまで完了です。**
+
+---
+
+## 🛠 開発の始め方（コードを触る人向け）
+
+### 必要なもの
+
+- **Python 3.10 以上**（3.11 推奨）
+- **PowerShell**（Windows）
+- **Git**（リポジトリの取得・更新用）
+
+### 手順（コピペでOK）
 
 ```powershell
+# 1. リポジトリのフォルダに入る
+cd <このリポジトリをクローンしたパス>
+
+# 2. バックエンド用フォルダに入る
 cd backend
+
+# 3. 仮想環境を作る（初回だけ）
 python -m venv .venv
+
+# 4. 仮想環境を有効にする
 .\.venv\Scripts\Activate.ps1
+
+# 5. ライブラリを入れる
 pip install -r requirements.txt
+
+# 6. サーバーを起動する（開発時はこのコマンドでOK）
 python -m uvicorn main:app --reload --port 8000
 ```
 
-### 3. （任意）旧Next.jsフロントを使う場合
+6のあと、ブラウザで **http://127.0.0.1:8000** を開けばアプリが動きます。  
+コードを変更すると、`--reload` の効果で自動で再読み込みされます。
 
-別ターミナルで:
+### 起動用スクリプトを使う場合
 
 ```powershell
-cd frontend
-.\run_frontend.ps1
+cd backend
+.\run_backend.ps1
 ```
 
-- http://localhost:3000 でNext.jsが起動します。  
-- **通常利用はバックエンドのみ（静的 `web/`）で問題ありません。**
+中で「仮想環境の有効化」と「uvicorn の起動」をまとめてやってくれます。ポートは 8000 です。
 
 ---
 
-## ディレクトリ構成
+## 📂 フォルダの役割（どこに何があるか）
 
 ```
-<リポジトリ>
-├── README.md
-├── backend/
-│   ├── main.py              # FastAPIアプリ・API・静的配信
-│   ├── run_app.py            # exe 用エントリ（ターミナル非表示・ブラウザ起動）
-│   ├── build_exe.ps1         # exe ビルドスクリプト（onedir）
-│   ├── TimeManagement.spec   # PyInstaller 用 spec
-│   ├── requirements.txt
+Time-management_Senyoshi/
+├── README.md          ← いま読んでいるファイル
+├── backend/           ← サーバー・処理の本体（Python）
+│   ├── main.py        ← APIと画面配信の入口。ここをいじると挙動が変わる
+│   ├── run_app.py     ← exe 用の起動スクリプト（開発時は使わない）
 │   ├── run_backend.ps1
-│   ├── job_runner.py         # ジョブ実行
-│   ├── storage/              # パス・状態管理
-│   ├── engine/               # PDF解析・Excel・アルコール突合
-│   │   ├── pipeline.py
-│   │   ├── alcohol_integration.py
-│   │   └── excel_headers.json
-│   └── companies/            # 会社別プリセット
-│       └── <会社名>/
-│           ├── mimamori.json
-│           └── telecom.json
-├── web/                      # 静的フロント（メイン）
-│   ├── index.html            # 1) 会社
-│   ├── device.html           # 2) 機種
-│   ├── run.html              # 3) 実行（アップロード）
-│   ├── job.html              # 4) 結果（マージ・紐づけ・同乗者・手入力・完了）
-│   ├── style.css
-│   └── app.js
-└── frontend/                 # 旧Next.jsフロント（任意）
+│   ├── build_exe.ps1  ← exe を作るときに実行する
+│   ├── requirements.txt
+│   ├── engine/        ← PDF解析・Excel作成・アルコール突合のロジック
+│   │   ├── pipeline.py      ← メインの処理の流れ
+│   │   └── alcohol_integration.py
+│   ├── companies/     ← 会社ごと・機種ごとの設定（JSON）
+│   └── work/          ← ジョブの一時ファイル（アップロード結果など）
+├── web/               ← 画面のHTML/CSS/JavaScript（静的ファイル）
+│   ├── index.html     ← 最初の画面（会社選択）
+│   ├── job.html       ← 結果画面（紐づけ・手入力・ダウンロード）
+│   └── ...
+└── frontend/          ← 旧Next.js版（通常は使わない）
 ```
+
+- **画面を変えたい** → `web/` の HTML/JS を編集
+- **集計ロジックを変えたい** → `backend/engine/pipeline.py` など
+- **会社・機種の設定を変えたい** → `backend/companies/<会社名>/` の JSON
 
 ---
 
-## exe 化（顧客配布用）
+## 📋 画面の流れ（ユーザーがやること）
 
-PyInstaller の **onedir** で exe を組み、ターミナルを表示せずブラウザだけ開く配布用フォルダを作成できます。
+1. **会社・機種を選ぶ**
+2. **PDF・対面データ・アルコールデータをアップロードして「実行」**
+3. **結果画面で順番に選択・入力**
+   - **3時間未満**の運行を「1本にまとめるか」選ぶ
+   - **3時間以上**空いている運行を「1本にまとめる」グループを選ぶ（任意）
+   - **同乗者**（デジタコがなくアルコールだけの人）を、どの運行に紐づけるか選ぶ（任意）
+   - **出庫・帰庫が取れていない行**があれば、手で日時を入力
+4. **「Excelダウンロード」** で集計結果を取得
 
-### 配布フォルダの形
+---
 
-ビルド後の `backend\dist\TimeManagement\` をそのまま顧客に渡します。
+## 📦 exe化して配布する
 
-```
-dist/TimeManagement/
-├── TimeManagement.exe    # これをダブルクリックで起動
-├── 起動方法.txt
-├── _app                  # hidden（companies / engine / web）
-│   ├── companies/
-│   ├── engine/
-│   └── web/
-├── _work                 # hidden（ジョブ入出力）
-└── （PyInstaller のランタイムファイル）
-```
+「Pythonを入れていない人にも渡したい」ときは、exe にまとめます。
 
-### 初回ビルド手順
+### やること（3ステップ）
 
-1. 仮想環境を用意し、依存を入れる。
-
+1. **backend フォルダに移動**
    ```powershell
    cd backend
-   python -m venv .venv
-   .\.venv\Scripts\Activate.ps1
-   pip install -r requirements.txt
-   pip install pyinstaller
    ```
 
-2. ビルドスクリプトを実行する（スクリプト内で仮想環境を有効化してから PyInstaller を実行します）。
-
+2. **ビルドスクリプトを実行**
    ```powershell
    .\build_exe.ps1
    ```
+   - 初回は PyInstaller のインストールなどで時間がかかることがあります。
 
-3. 出力は **`backend\dist\TimeManagement\`** です。このフォルダ一式を配布します。
+3. **できあがったフォルダをそのまま配布**
+   - 場所: `backend\dist\TimeManagement\`
+   - 中にある **TimeManagement.exe** をダブルクリックすると起動します。
+   - 同じフォルダに **起動方法.txt** があるので、それも一緒に渡すと親切です。
 
-### コードを変えたあとに exe をやり直すとき
+### コードを直したあと、exe をやり直すとき
 
-中身のコード（`main.py`・`web/`・`engine/` など）を変更したら、exe を**作り直す**必要があります。
+```powershell
+cd backend
+Remove-Item -Recurse -Force .\dist, .\build -ErrorAction SilentlyContinue
+.\build_exe.ps1
+```
 
-1. **古いビルド結果を消す**（任意だが推奨）
+新しい `dist\TimeManagement\` を再度配布用として使います。
 
-   ```powershell
-   cd backend
-   Remove-Item -Recurse -Force .\dist, .\build -ErrorAction SilentlyContinue
-   ```
+### 起動できないとき
 
-2. **再ビルド**
-
-   ```powershell
-   .\build_exe.ps1
-   ```
-
-3. 新しい **`dist\TimeManagement\`** を配布用として使います。
-
-※ `build_exe.ps1` が `_app` に `companies`・`web`・`engine` をコピーするため、ソースを変えた内容は再ビルドで exe 配布物に反映されます。
-
-### 起動・トラブル時
-
-- **起動**: `TimeManagement.exe` をダブルクリック。しばらくするとブラウザで http://127.0.0.1:8000 が開きます。
-- **接続できないとき**: exe と同じフォルダに `TimeManagement_error.log` ができていないか確認してください。
+- exe と同じフォルダに **TimeManagement_error.log** ができていないか確認する
+- ログにエラー内容が書いてあるので、それを手がかりに原因を調べられる
 
 ---
 
-## 主なAPI（参考）
+## ❓ よくあること・困ったとき
 
-- `GET /api/companies` … 会社一覧  
-- `GET /api/companies/{company}/devices` … 機種一覧  
-- `POST /api/jobs` … ジョブ作成（PDF・対面・アルコールをアップロード）  
-- `GET /api/jobs/{jobId}` … ジョブ状態・結果取得  
-- `POST /api/jobs/{jobId}/revert-step` … 1つ前の画面に戻る  
-- `POST /api/jobs/{jobId}/complete-merge` … 3時間未満のまとめ送信  
-- `POST /api/jobs/{jobId}/complete-link-pairs` … 3時間以上の紐づけ送信  
-- `POST /api/jobs/{jobId}/complete-codriver-link` … 同乗者紐づけ送信  
-- `GET /api/jobs/{jobId}/download/excel` … Excelダウンロード  
+| 状況 | 確認すること |
+|------|----------------|
+| 起動しない | Python のバージョン（3.10以上か）、`cd backend` できているか |
+| 画面が開かない | ブラウザで **http://127.0.0.1:8000** を開いているか（ポート 8000 で起動しているか） |
+| 会社や機種が選べない | `backend/companies/` に該当する会社名フォルダと JSON があるか |
+| Excel の項目を変えたい | `backend/engine/excel_headers.json` や `pipeline.py` の出力部分 |
+| ジョブの途中結果を見たい | `backend/work/jobs/<jobId>/` にファイルができる |
 
 ---
 
-## 注意事項
+## 🔧 技術メモ（開発者向け）
 
-- **会社×機種のプリセット**は `backend/companies/<会社名>/<機種>.json` に配置します。  
-- PDF抽出の本体は **`backend/engine/pipeline.py`** です。  
-- ジョブの入出力は `backend/work/jobs/<jobId>/` に保存されます。
+- **フロント**: 静的 HTML/CSS/JS（`web/`）。バックエンドが `/` で配信し、`/api/*` でAPIを提供。
+- **バックエンド**: FastAPI + Uvicorn。PDF解析は pdfplumber、Excelは openpyxl。
+- **主なAPI**: `POST /api/jobs`（ジョブ作成）、`GET /api/jobs/{jobId}`（状態取得）、`GET /api/jobs/{jobId}/download/excel`（Excel取得）など。
 
 ---
 
