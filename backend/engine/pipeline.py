@@ -29,6 +29,10 @@ _drive_compare_logger: Optional[logging.Logger] = None
 _REST_COMPARE_LOG_PATH = Path(__file__).resolve().parents[1] / "work" / "rest_compare.log"
 _rest_compare_logger: Optional[logging.Logger] = None
 
+# アルコール突合で紐づかなかった運行のログ（乗務員ID・時刻の確認用）
+_ALCOHOL_COMPARE_LOG_PATH = Path(__file__).resolve().parents[1] / "work" / "alcohol_compare.log"
+_alcohol_compare_logger: Optional[logging.Logger] = None
+
 
 def _get_rest_compare_logger() -> logging.Logger:
     """拘束時間・休憩時間のログ用（rest_compare.log）。"""
@@ -42,6 +46,19 @@ def _get_rest_compare_logger() -> logging.Logger:
     h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     _rest_compare_logger.addHandler(h)
     return _rest_compare_logger
+
+
+def _get_alcohol_compare_logger() -> logging.Logger:
+    global _alcohol_compare_logger
+    if _alcohol_compare_logger is not None:
+        return _alcohol_compare_logger
+    _alcohol_compare_logger = logging.getLogger("engine.pipeline.alcohol_compare")
+    _alcohol_compare_logger.setLevel(logging.INFO)
+    _ALCOHOL_COMPARE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    h = logging.FileHandler(_ALCOHOL_COMPARE_LOG_PATH, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _alcohol_compare_logger.addHandler(h)
+    return _alcohol_compare_logger
 
 
 def _get_drive_compare_logger() -> logging.Logger:
@@ -928,15 +945,27 @@ def apply_alcohol_to_run_states(
     """run_states の各 merged_header の出庫・帰庫をアルコール突合結果で上書きする（in place）。"""
     for rs in run_states:
         mh = rs.get("merged_header") or {}
+        orig_out, orig_in = mh.get("出庫日時"), mh.get("帰庫日時")
         out_matched, in_matched = match_alcohol_for_run(
             alcohol_events,
             mh.get("乗務員ID"),
-            mh.get("出庫日時"),
-            mh.get("帰庫日時"),
+            orig_out,
+            orig_in,
             margin_minutes=margin_minutes,
         )
         mh["出庫日時"] = format_dt_for_excel(out_matched)
         mh["帰庫日時"] = format_dt_for_excel(in_matched)
+        # デジタコに出庫/帰庫があるのにアルコールで紐づかなかった運行をログ（原因切り分け用）
+        if (orig_out and out_matched is None) or (orig_in and in_matched is None):
+            _get_alcohol_compare_logger().info(
+                "ALCOHOL_NO_MATCH run_id=%s 乗務員ID=%s デジタコ出庫=%s デジタコ帰庫=%s no_match_out=%s no_match_in=%s",
+                mh.get("運行ID"),
+                mh.get("乗務員ID"),
+                orig_out,
+                orig_in,
+                orig_out and out_matched is None,
+                orig_in and in_matched is None,
+            )
 
         # 統合済みの運転時間は header に退避してから破棄する（再計算 fallback で膨張しないように）
         mr = rs.get("merged_row")
@@ -1460,6 +1489,12 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
             "day_min": day_min, "night_min": night_min,
         })
 
+    # 統合時は「各運行の拘束の合計」に運行間の時間を加算（もともとの合算ロジックは変えず加算のみ）
+    if len(rows) >= 2 and gap_segments:
+        merged_row["拘束時間_分割前"] = num_val(merged_row, "拘束時間_分割前") + sum(g["dur"] for g in gap_segments)
+        merged_row["拘束時間_昼_分割前"] = num_val(merged_row, "拘束時間_昼_分割前") + sum(g["day_min"] for g in gap_segments)
+        merged_row["拘束時間_夜_分割前"] = num_val(merged_row, "拘束時間_夜_分割前") + sum(g["night_min"] for g in gap_segments)
+
     # 各運行の分割1・2を候補に、運行間(>=3h)も候補に
     candidates: List[Dict[str, Any]] = []  # { dur, day_min, night_min, start, end, is_gap }
     for r in rows:
@@ -1546,6 +1581,12 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         num_val(merged_row, "休憩時間_夜_分割前")
         + extra_keikai_pre_night
     )
+
+    # 統合時は拘束を「最初出庫～最後帰庫」にしたので、労働時間_分割前も 拘束－休憩 で再計算
+    if len(rows) >= 2:
+        merged_row["労働時間_分割前"] = max(0, num_val(merged_row, "拘束時間_分割前") - num_val(merged_row, "休憩時間_分割前"))
+        merged_row["労働時間_昼_分割前"] = max(0, num_val(merged_row, "拘束時間_昼_分割前") - num_val(merged_row, "休憩時間_昼_分割前"))
+        merged_row["労働時間_夜_分割前"] = max(0, num_val(merged_row, "拘束時間_夜_分割前") - num_val(merged_row, "休憩時間_夜_分割前"))
 
     # 拘束・休憩の統合ログ（rest_compare.log）
     try:

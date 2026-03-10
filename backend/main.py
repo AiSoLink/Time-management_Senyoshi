@@ -429,6 +429,19 @@ def company_devices(company: str):
         devices.append({"name": dev, "preset": (company_dir / f"{dev}.json").exists()})
     return {"company": company, "devices": devices}
 
+def _write_upload_error_log(msg: str) -> None:
+    """exe 実行時にアップロードエラーを exe 横に書き、原因を残す。"""
+    try:
+        if getattr(sys, "frozen", False):
+            log_path = Path(sys.executable).resolve().parent / "TimeManagement_upload_error.log"
+        else:
+            log_path = Path(__file__).resolve().parents[1] / "work" / "upload_error.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text(msg, encoding="utf-8")
+    except Exception:
+        pass
+
+
 @app.post("/api/jobs")
 async def create_job(
     background: BackgroundTasks,
@@ -438,66 +451,74 @@ async def create_job(
     taimen: Optional[List[UploadFile]] = File(None),
     alcohol: Optional[List[UploadFile]] = File(None),
 ):
-    company = safe_name(company)
-    company_dir = COMPANIES_DIR / company
-    if not company_dir.exists():
-        raise HTTPException(status_code=400, detail="Company does not exist.")
-    preset = company_dir / f"{device}.json"
-    if not preset.exists():
-        raise HTTPException(status_code=400, detail="Preset JSON not found for this device.")
-    if not pdfs:
-        raise HTTPException(status_code=400, detail="No PDFs uploaded.")
+    try:
+        company = safe_name(company)
+        company_dir = COMPANIES_DIR / company
+        if not company_dir.exists():
+            raise HTTPException(status_code=400, detail="Company does not exist.")
+        preset = company_dir / f"{device}.json"
+        if not preset.exists():
+            raise HTTPException(status_code=400, detail="Preset JSON not found for this device.")
+        if not pdfs:
+            raise HTTPException(status_code=400, detail="No PDFs uploaded.")
 
-    job_id = time.strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:6]
-    inp = job_input_dir(job_id)
-    out = job_output_dir(job_id)
-    inp.mkdir(parents=True, exist_ok=True)
-    out.mkdir(parents=True, exist_ok=True)
+        job_id = time.strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:6]
+        inp = job_input_dir(job_id)
+        out = job_output_dir(job_id)
+        inp.mkdir(parents=True, exist_ok=True)
+        out.mkdir(parents=True, exist_ok=True)
 
-    for f in pdfs:
-        data = await f.read()
-        name = safe_name(Path(f.filename).name)
-        if not name.lower().endswith(".pdf"):
-            name += ".pdf"
-        (inp / name).write_bytes(data)
+        for f in pdfs:
+            data = await f.read()
+            name = safe_name(Path(f.filename or "").name or "file")
+            if not name.lower().endswith(".pdf"):
+                name += ".pdf"
+            (inp / name).write_bytes(data)
 
-    def _input_file_name(original_name: str) -> str:
-        p = Path(original_name)
-        stem = safe_name(p.stem)
-        ext = (p.suffix or "").lower()
-        if ext in (".csv", ".xlsx"):
-            return stem + ext
-        return stem + ext if ext else stem
+        def _input_file_name(original_name: str) -> str:
+            p = Path(original_name)
+            stem = safe_name(p.stem)
+            ext = (p.suffix or "").lower()
+            if ext in (".csv", ".xlsx"):
+                return stem + ext
+            return stem + ext if ext else stem
 
-    (inp / "taimen").mkdir(exist_ok=True)
-    for f in taimen or []:
-        data = await f.read()
-        name = _input_file_name(f.filename or "")
-        (inp / "taimen" / name).write_bytes(data)
+        (inp / "taimen").mkdir(exist_ok=True)
+        for f in taimen or []:
+            data = await f.read()
+            name = _input_file_name(f.filename or "")
+            (inp / "taimen" / name).write_bytes(data)
 
-    (inp / "alcohol").mkdir(exist_ok=True)
-    for f in alcohol or []:
-        data = await f.read()
-        name = _input_file_name(f.filename or "")
-        (inp / "alcohol" / name).write_bytes(data)
+        (inp / "alcohol").mkdir(exist_ok=True)
+        for f in alcohol or []:
+            data = await f.read()
+            name = _input_file_name(f.filename or "")
+            (inp / "alcohol" / name).write_bytes(data)
 
-    state = JobState(
-        jobId=job_id,
-        company=company,
-        device=device,
-        status="queued",
-        totalPdfs=len(pdfs),
-        processedPdfs=0,
-        errorCount=0,
-        warnCount=0,
-        startedAt=None,
-        finishedAt=None,
-        artifacts=Artifacts(excel=False, log=False, skipped=False),
-    )
-    save_state(job_state_path(job_id), state)
+        state = JobState(
+            jobId=job_id,
+            company=company,
+            device=device,
+            status="queued",
+            totalPdfs=len(pdfs),
+            processedPdfs=0,
+            errorCount=0,
+            warnCount=0,
+            startedAt=None,
+            finishedAt=None,
+            artifacts=Artifacts(excel=False, log=False, skipped=False),
+        )
+        save_state(job_state_path(job_id), state)
 
-    background.add_task(run_job, job_id)
-    return JSONResponse(status_code=202, content={"jobId": job_id})
+        background.add_task(run_job, job_id)
+        return JSONResponse(status_code=202, content={"jobId": job_id})
+    except HTTPException:
+        raise
+    except Exception as e:  # exe での 500 原因切り分け用
+        import traceback
+        msg = f"{time.strftime('%Y-%m-%d %H:%M:%S')} create_job error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        _write_upload_error_log(msg)
+        raise HTTPException(status_code=500, detail=f"Upload failed: {type(e).__name__}: {e}")
 
 @app.get("/api/jobs/{jobId}")
 def get_job(jobId: str):

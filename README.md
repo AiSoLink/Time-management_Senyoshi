@@ -163,8 +163,23 @@ Time-management_Senyoshi/
 
 ### コードを直したあと、exe をやり直すとき
 
+exe が起動したままでは `dist` がロックされて削除できません。**先に exe を終了するか、下記のクリーンアップを実行**してからビルドしてください。
+
+**方法1: クリーンアップスクリプトを使う（推奨）**
+
 ```powershell
 cd backend
+.\clean_dist.ps1
+.\build_exe.ps1
+```
+
+`clean_dist.ps1` は TimeManagement のプロセスを終了してから `dist` と `build` を削除します。
+
+**方法2: 手でコマンドを打つ場合**
+
+```powershell
+cd backend
+Get-Process -Name "TimeManagement" -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-Item -Recurse -Force .\dist, .\build -ErrorAction SilentlyContinue
 .\build_exe.ps1
 ```

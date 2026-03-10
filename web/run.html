@@ -74,6 +74,7 @@
     var alcoholInput = document.getElementById("alcohol");
     var jobId = null;
     var pollTimer = null;
+    var lastJobStatus = null;  // 確認なしで完了したときだけ自動DLするため
 
     function showErr(msg) {
       errEl.textContent = msg || "";
@@ -131,6 +132,7 @@
         if (j.status === "queued" || j.status === "running") {
           pollTimer = setTimeout(poll, 1000);
         } else {
+          lastJobStatus = j.status;
           progressSection.style.display = "none";
           doneSection.style.display = "block";
         }
@@ -138,7 +140,9 @@
     }
 
     document.getElementById("btnToResult").addEventListener("click", function () {
-      location.href = "job.html?id=" + encodeURIComponent(jobId);
+      var q = "?id=" + encodeURIComponent(jobId);
+      if (lastJobStatus === "succeeded") q += "&autodownload=1";
+      location.href = "job.html" + q;
     });
     document.getElementById("btnAgain").addEventListener("click", function () {
       jobId = null;

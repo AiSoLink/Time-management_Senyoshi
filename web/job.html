@@ -93,6 +93,7 @@
   var manualDateFilter = "";
   var submitting = false;
   var pollTimer = null;
+  var autoDownloadDone = false;  // 「結果を確認する」から遷移したときの1回だけ自動DL
 
   var MANUAL_FIELD_KEYS = ["出庫日", "出庫時", "出庫分", "帰庫日", "帰庫時", "帰庫分"];
 
@@ -167,6 +168,36 @@
       });
     });
     return list;
+  }
+
+  /** 手入力: 日付を含む全フィールドの順序（行ごと 出庫日→出庫時→出庫分→帰庫日→帰庫時→帰庫分）。日付で Enter 時に「次の空白」へ移動する用 */
+  function getManualInputsInOrderWithDates() {
+    var content = document.getElementById("content");
+    if (!content) return [];
+    var fieldOrder = ["out-date", "out-h", "out-m", "in-date", "in-h", "in-m"];
+    var rows = content.querySelectorAll("tr");
+    var list = [];
+    rows.forEach(function (tr) {
+      fieldOrder.forEach(function (f) {
+        var el = tr.querySelector("input[data-field=\"" + f + "\"]");
+        if (el) list.push(el);
+      });
+    });
+    return list;
+  }
+
+  /** 日付欄で Enter 時: 次の空白フィールドにフォーカス */
+  function focusNextEmptyManualInput(current) {
+    var list = getManualInputsInOrderWithDates();
+    var idx = list.indexOf(current);
+    if (idx < 0) return;
+    for (var i = idx + 1; i < list.length; i++) {
+      if ((list[i].value || "").trim() === "") {
+        list[i].focus();
+        if (list[i].select) list[i].select();
+        return;
+      }
+    }
   }
 
   function focusNextManualInput(current) {
@@ -346,7 +377,57 @@
       return;
     }
     if (job.status === "succeeded") {
-      contentEl.innerHTML = "<p style=\"margin-top:8px\">Excelのダウンロードが完了しました。</p>";
+      contentEl.innerHTML = "<p style=\"margin-top:8px\">処理が完了しました。</p>" +
+        "<p style=\"margin-top:12px\"><button type=\"button\" id=\"btnDownloadExcel\" class=\"btn-primary\">Excelをダウンロード</button></p>";
+      var btn = document.getElementById("btnDownloadExcel");
+      if (btn) {
+        btn.addEventListener("click", function () {
+          if (submitting) return;
+          setErr("");
+          submitting = true;
+          render();
+          var excelUrl = API_BASE + "/api/jobs/" + encodeURIComponent(jobId) + "/download/excel";
+          fetch(excelUrl, { cache: "no-store" })
+            .then(function (res) {
+              if (!res.ok) {
+                return new Promise(function (r) { setTimeout(r, 500); }).then(function () { return fetch(excelUrl, { cache: "no-store" }); });
+              }
+              return res;
+            })
+            .then(function (res) {
+              if (!res || !res.ok) throw new Error("Excelの取得に失敗しました。しばらく待ってから再度お試しください。");
+              return res.blob();
+            })
+            .then(function (blob) {
+              if (!blob || blob.size === 0) throw new Error("Excelファイルの取得に失敗しました。");
+              triggerDownload(blob, "output.xlsx");
+            })
+            .catch(function (e) { setErr(String(e)); })
+            .then(function () { submitting = false; render(); });
+        });
+      }
+      // 確認なしで「結果を確認する」から遷移したときだけ1回だけ自動ダウンロード
+      if (params.get("autodownload") === "1" && !autoDownloadDone) {
+        autoDownloadDone = true;
+        var excelUrl = API_BASE + "/api/jobs/" + encodeURIComponent(jobId) + "/download/excel";
+        fetch(excelUrl, { cache: "no-store" })
+          .then(function (res) {
+            if (!res.ok) {
+              return new Promise(function (r) { setTimeout(r, 500); }).then(function () { return fetch(excelUrl, { cache: "no-store" }); });
+            }
+            return res;
+          })
+          .then(function (res) {
+            if (!res || !res.ok) return null;
+            return res.blob();
+          })
+          .then(function (blob) {
+            if (blob && blob.size > 0) triggerDownload(blob, "output.xlsx");
+          });
+        var u = new URL(location.href);
+        u.searchParams.delete("autodownload");
+        history.replaceState(null, "", u.pathname + u.search);
+      }
       return;
     }
     if (job.status === "failed") {
@@ -1035,8 +1116,13 @@
     document.querySelectorAll(".manual-out-date").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        var norm = (inp.value || "").normalize("NFKC");
+        if (inp.value !== norm) inp.value = norm;
         manualEdits[row] = manualEdits[row] || {};
-        manualEdits[row].出庫日 = inp.value;
+        manualEdits[row].出庫日 = norm;
+      });
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); focusNextEmptyManualInput(inp); }
       });
     });
     document.querySelectorAll(".manual-out-h").forEach(function (inp) {
@@ -1044,7 +1130,7 @@
         var row = parseInt(inp.getAttribute("data-row"), 10);
         var self = inp;
         setTimeout(function () {
-          var raw = self.value.replace(/\D/g, "");
+          var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
           var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
           if (self.value !== norm) self.value = norm;
           manualEdits[row] = manualEdits[row] || {};
@@ -1060,7 +1146,7 @@
         var row = parseInt(inp.getAttribute("data-row"), 10);
         var self = inp;
         setTimeout(function () {
-          var raw = self.value.replace(/\D/g, "");
+          var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
           var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
           if (self.value !== norm) self.value = norm;
           manualEdits[row] = manualEdits[row] || {};
@@ -1074,8 +1160,13 @@
     document.querySelectorAll(".manual-in-date").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        var norm = (inp.value || "").normalize("NFKC");
+        if (inp.value !== norm) inp.value = norm;
         manualEdits[row] = manualEdits[row] || {};
-        manualEdits[row].帰庫日 = inp.value;
+        manualEdits[row].帰庫日 = norm;
+      });
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); focusNextEmptyManualInput(inp); }
       });
     });
     document.querySelectorAll(".manual-in-h").forEach(function (inp) {
@@ -1083,7 +1174,7 @@
         var row = parseInt(inp.getAttribute("data-row"), 10);
         var self = inp;
         setTimeout(function () {
-          var raw = self.value.replace(/\D/g, "");
+          var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
           var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
           if (self.value !== norm) self.value = norm;
           manualEdits[row] = manualEdits[row] || {};
@@ -1099,7 +1190,7 @@
         var row = parseInt(inp.getAttribute("data-row"), 10);
         var self = inp;
         setTimeout(function () {
-          var raw = self.value.replace(/\D/g, "");
+          var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
           var norm = raw.length > 2 ? raw.slice(0, 2) : raw;
           if (self.value !== norm) self.value = norm;
           manualEdits[row] = manualEdits[row] || {};

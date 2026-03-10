@@ -55,6 +55,20 @@ def _normalize_header(s: Optional[str]) -> str:
     return s
 
 
+def _normalize_dep_return(typ: Any) -> Optional[str]:
+    """対面の「出帰庫」列を正規化。出庫/帰庫の表記ゆれ（全角・前後空白・接尾辞）を許容し '出庫' or '帰庫' を返す。"""
+    if typ is None:
+        return None
+    s = unicodedata.normalize("NFKC", str(typ).replace("\u00a0", " ").replace("\u3000", " ").strip())
+    if not s:
+        return None
+    if s == "出庫" or (s.startswith("出庫") and len(s) >= 2):
+        return "出庫"
+    if s == "帰庫" or (s.startswith("帰庫") and len(s) >= 2):
+        return "帰庫"
+    return None
+
+
 def _read_csv_rows(path: Path, max_rows: int = 10000) -> List[List[str]]:
     """CSVを読み、行リストで返す。日本語Excel由来は cp932 が多いので先に試す。"""
     for enc in ("cp932", "utf-8-sig", "utf-8"):
@@ -117,8 +131,8 @@ def load_taimen_sheet(ws: Worksheet) -> List[Tuple[Any, Any, Any, str]]:
         typ = _cell_value(ws, r, col_type)
         if id_ is None and name is None and dt is None:
             continue
-        typ_str = (str(typ).strip() if typ is not None else "") or ""
-        if typ_str not in ("出庫", "帰庫"):
+        typ_str = _normalize_dep_return(typ)
+        if typ_str is None:
             continue
         rows.append((id_, name, dt, typ_str))
     return rows
@@ -166,9 +180,10 @@ def load_taimen_csv(path: Path) -> List[Tuple[Any, Any, Any, str]]:
         typ = (row[col_type] or "").strip() if col_type < len(row) else ""
         if not id_ and not name and not dt:
             continue
-        if typ not in ("出庫", "帰庫"):
+        typ_str = _normalize_dep_return(typ)
+        if typ_str is None:
             continue
-        out.append((id_ or None, name or None, dt or None, typ))
+        out.append((id_ or None, name or None, dt or None, typ_str))
     return out
 
 
