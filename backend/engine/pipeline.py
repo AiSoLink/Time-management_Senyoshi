@@ -25,6 +25,24 @@ from openpyxl.styles import Font
 _DRIVE_COMPARE_LOG_PATH = Path(__file__).resolve().parents[1] / "work" / "drive_compare.log"
 _drive_compare_logger: Optional[logging.Logger] = None
 
+# 拘束時間・休憩時間の比較ログ用ファイル（単一運行・統合後の値の確認用）
+_REST_COMPARE_LOG_PATH = Path(__file__).resolve().parents[1] / "work" / "rest_compare.log"
+_rest_compare_logger: Optional[logging.Logger] = None
+
+
+def _get_rest_compare_logger() -> logging.Logger:
+    """拘束時間・休憩時間のログ用（rest_compare.log）。"""
+    global _rest_compare_logger
+    if _rest_compare_logger is not None:
+        return _rest_compare_logger
+    _rest_compare_logger = logging.getLogger("engine.pipeline.rest_compare")
+    _rest_compare_logger.setLevel(logging.INFO)
+    _REST_COMPARE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    h = logging.FileHandler(_REST_COMPARE_LOG_PATH, encoding="utf-8")
+    h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _rest_compare_logger.addHandler(h)
+    return _rest_compare_logger
+
 
 def _get_drive_compare_logger() -> logging.Logger:
     global _drive_compare_logger
@@ -37,6 +55,24 @@ def _get_drive_compare_logger() -> logging.Logger:
     h.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
     _drive_compare_logger.addHandler(h)
     return _drive_compare_logger
+
+
+def log_merged_row_discard(
+    run_id: Any,
+    reason: str,
+    drive_before: Any,
+    header_走行状態_分: Any,
+    header_initial: Any,
+) -> None:
+    """merged_row 破棄直前のログ（main 等から呼ぶ用）。"""
+    _get_drive_compare_logger().info(
+        "MERGED_ROW_DISCARD run_id=%s reason=%s 運転時間=%s header_走行状態_分=%s header_initial=%s",
+        run_id,
+        reason,
+        drive_before,
+        header_走行状態_分,
+        header_initial,
+    )
 
 
 # =========================
@@ -364,11 +400,13 @@ def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any
             except Exception:
                 pass
 
-    # 走行状態の次の時刻（H:MM）を分で取得。1運行1つなのでここで取れば運転時間として合算可能
+    # 走行状態の次の時刻（H:MM）を分で取得。PDFで「⾛⾏状態」等の異体字になることがあるので NFKC で正規化し、走の異体字も許容
+    text_for_drive = unicodedata.normalize("NFKC", cleaned_text)
     drive_re = (preset.get("header_extract") or {}).get("drive_time_regex")
     if not drive_re:
-        drive_re = r"走行状態\s*[:：]?\s*(\d{1,2}):(\d{2})"
-    m = re.search(drive_re, cleaned_text)
+        # 走行状態 または 走の異体字+行状態（1文字）
+        drive_re = r"(?:走行状態|.\s*行状態)\s*[:：]?\s*(\d{1,2}):(\d{2})"
+    m = re.search(drive_re, text_for_drive)
     if m:
         try:
             h, mn = int(m.group(1)), int(m.group(2))
@@ -376,6 +414,24 @@ def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any
                 fields["走行状態_分"] = h * 60 + mn
         except (ValueError, IndexError):
             pass
+    else:
+        # デバッグ: 走行状態が取れなかったとき「状態」付近または先頭をログ（異体字確認用）
+        if fields.get("運行ID"):
+            idx = text_for_drive.find("状態")
+            if idx >= 0:
+                snippet = text_for_drive[max(0, idx - 10) : idx + 15]
+                _get_drive_compare_logger().info(
+                    "DRIVE_HEADER_MISS run_id=%s snippet=%s repr=%s",
+                    fields.get("運行ID"),
+                    snippet,
+                    repr(snippet),
+                )
+            else:
+                _get_drive_compare_logger().info(
+                    "DRIVE_HEADER_MISS run_id=%s no_状態 head_repr=%s",
+                    fields.get("運行ID"),
+                    repr(text_for_drive[:280]),
+                )
 
     return fields
 
@@ -519,20 +575,31 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
     # 拘束時間の昼/夜内訳（5:00-22:00=昼、22:00-5:00=夜）
     bind_day, bind_night = _split_day_night_minutes(out_dt, in_dt)
 
-    # 運転時間（分）：PDFの「走行状態」の次の時刻を優先。無い場合は明細シーケンスから算出
+    # 運転時間（分）：統合済みは header の確定値のみ使用。単一運行は 走行状態_分 → _merged_drive_min_initial → 明細 fallback
     drive_min: Optional[int] = None
+    used_走行状態_分 = False
+    used_fallback = False
+    is_merged = header.get("is_merged_run") or header.get("_merged_drive_min_initial") is not None
     if header.get("走行状態_分") is not None:
         try:
             v = header["走行状態_分"]
             drive_min = int(v) if isinstance(v, (int, float)) else int(float(str(v).strip()))
             if drive_min < 0:
                 drive_min = 0
+            used_走行状態_分 = True
         except (ValueError, TypeError):
             pass
-    if drive_min is None:
+    if drive_min is None and header.get("_merged_drive_min_initial") is not None:
+        try:
+            v = header["_merged_drive_min_initial"]
+            drive_min = int(v) if isinstance(v, (int, float)) else int(float(str(v).strip()))
+            if drive_min < 0:
+                drive_min = 0
+        except (ValueError, TypeError):
+            pass
+    if drive_min is None and not is_merged:
         drive_min = 0
         prev_depart: Optional[datetime] = out_dt
-
         for s in seq:
             if s["arr_dt"] is not None and prev_depart is not None:
                 if s["arr_dt"] >= prev_depart:
@@ -543,9 +610,22 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
                 prev_depart = s["arr_dt"]
             elif s["dep_dt"] is not None:
                 prev_depart = s["dep_dt"]
-
         if prev_depart is not None and in_dt >= prev_depart:
             drive_min += _minutes_between(in_dt, prev_depart)
+        used_fallback = True
+    if drive_min is None:
+        drive_min = 0
+    try:
+        _get_drive_compare_logger().info(
+            "COMPUTE_METRICS run_id=%s used_走行状態_分=%s fallback=%s drive_min=%s is_merged=%s",
+            header.get("運行ID"),
+            used_走行状態_分,
+            used_fallback,
+            drive_min,
+            is_merged,
+        )
+    except Exception:
+        pass
 
     # 待機時間（分）
     wait_min = 0
@@ -636,6 +716,23 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
         "休息時間_昼": int(rest_day),
         "休息時間_夜": int(rest_night),
     }
+
+    try:
+        _get_rest_compare_logger().info(
+            "COMPUTE_METRICS run_id=%s 出庫=%s 帰庫=%s 拘束_分割前=%s 拘束_昼=%s 拘束_夜=%s 休憩_分割前=%s 休憩_昼=%s 休憩_夜=%s 休息=%s",
+            header.get("運行ID"),
+            out_dt,
+            in_dt,
+            int(bind_min),
+            int(bind_day),
+            int(bind_night),
+            int(break_total),
+            int(break_day),
+            int(break_night),
+            int(rest_total),
+        )
+    except Exception:
+        pass
 
     for idx, b in enumerate(rest_splits, start=1):
         out[f"分割開始{idx}"] = b["start"]
@@ -841,9 +938,24 @@ def apply_alcohol_to_run_states(
         mh["出庫日時"] = format_dt_for_excel(out_matched)
         mh["帰庫日時"] = format_dt_for_excel(in_matched)
 
-        # ここが重要:
-        # アルコール時刻で header を上書きしたら、
-        # 以前の merged_row は時刻と計算値がズレるので必ず破棄する
+        # 統合済みの運転時間は header に退避してから破棄する（再計算 fallback で膨張しないように）
+        mr = rs.get("merged_row")
+        if mr is not None:
+            drive_before = mr.get("運転時間")
+            if drive_before is not None:
+                try:
+                    mh["走行状態_分"] = int(drive_before) if isinstance(drive_before, (int, float)) else int(float(str(drive_before).strip()))
+                    mh["_merged_drive_min_initial"] = mh["走行状態_分"]
+                except (ValueError, TypeError):
+                    pass
+            _get_drive_compare_logger().info(
+                "MERGED_ROW_DISCARD run_id=%s reason=alcohol 運転時間=%s header_走行状態_分=%s header_initial=%s",
+                mh.get("運行ID"),
+                drive_before,
+                mh.get("走行状態_分"),
+                mh.get("_merged_drive_min_initial"),
+            )
+        # アルコール時刻で header を上書きしたため、merged_row は出庫/帰庫と不整合になるので破棄する
         rs["merged_row"] = None
 
 def rows_from_run_states(
@@ -873,18 +985,42 @@ def rows_from_run_states(
 
         cached_row = rs.get("merged_row")
         if cached_row:
-            # キャッシュが header と一致している時だけ使う
             if (
                 (cached_row.get("出庫日時") == merged_header.get("出庫日時"))
                 and (cached_row.get("帰庫日時") == merged_header.get("帰庫日時"))
             ):
-                return dict(cached_row)
+                out_row = dict(cached_row)
+                _get_drive_compare_logger().info(
+                    "ROWS_FROM_RUN_STATES run_id=%s cached_used=True reason=header_match output_drive=%s",
+                    merged_header.get("運行ID"),
+                    out_row.get("運転時間"),
+                )
+                if merged_header.get("merged_source_ids") or merged_header.get("is_merged_run"):
+                    _get_drive_compare_logger().info(
+                        "ROWS_MERGED_DRIVE run_id=%s header_走行状態_分=%s header_initial=%s output_drive=%s",
+                        merged_header.get("運行ID"),
+                        merged_header.get("走行状態_分"),
+                        merged_header.get("_merged_drive_min_initial"),
+                        out_row.get("運転時間"),
+                    )
+                try:
+                    _get_rest_compare_logger().info(
+                        "ROWS_OUTPUT run_id=%s source=cached 拘束_分割前=%s 休憩_分割前=%s 休息時間=%s",
+                        merged_header.get("運行ID"),
+                        out_row.get("拘束時間_分割前"),
+                        out_row.get("休憩時間_分割前"),
+                        out_row.get("休息時間"),
+                    )
+                except Exception:
+                    pass
+                return out_row
 
         metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
         row = {**merged_header, **metrics}
 
         # 統合行は _merge_runs 直後の運転時間を使う。再計算すると運行間ギャップを拾って膨張するため上書きしない
         prev_drive = merged_header.get("_merged_drive_min_initial")
+        used_initial = False
         if prev_drive is not None:
             new_drive = metrics.get("運転時間")
             try:
@@ -902,6 +1038,37 @@ def rows_from_run_states(
                 new_int,
             )
             _apply_merged_drive_override(row, merged_header)
+            used_initial = True
+        reason = "no_cache_or_mismatch"
+        if not cached_row:
+            reason = "no_cached_row"
+        elif cached_row.get("出庫日時") != merged_header.get("出庫日時") or cached_row.get("帰庫日時") != merged_header.get("帰庫日時"):
+            reason = "header_mismatch"
+        _get_drive_compare_logger().info(
+            "ROWS_FROM_RUN_STATES run_id=%s cached_used=False fallback=True reason=%s output_drive=%s used_header_drive=%s",
+            merged_header.get("運行ID"),
+            reason,
+            row.get("運転時間"),
+            used_initial or merged_header.get("走行状態_分") is not None,
+        )
+        if merged_header.get("merged_source_ids") or merged_header.get("is_merged_run"):
+            _get_drive_compare_logger().info(
+                "ROWS_MERGED_DRIVE run_id=%s header_走行状態_分=%s header_initial=%s output_drive=%s",
+                merged_header.get("運行ID"),
+                merged_header.get("走行状態_分"),
+                merged_header.get("_merged_drive_min_initial"),
+                row.get("運転時間"),
+            )
+        try:
+            _get_rest_compare_logger().info(
+                "ROWS_OUTPUT run_id=%s source=recomputed 拘束_分割前=%s 休憩_分割前=%s 休息時間=%s",
+                merged_header.get("運行ID"),
+                row.get("拘束時間_分割前"),
+                row.get("休憩時間_分割前"),
+                row.get("休息時間"),
+            )
+        except Exception:
+            pass
 
         if device in ("telecom", "mimamori") and row.get("運行ID"):
             rid = str(row["運行ID"])
@@ -1213,9 +1380,70 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
     # 総走行距離は合算（帰庫－出庫で再計算でもよいが、ここでは合算）
     merged_row["総走行距離"] = sum(float_val(r, "総走行距離") for r in rows) if rows else 0
 
-    # 合算列
+    # 合算列（運転時間は後で source 単位解決してから設定するためここではスキップしないが上書きする）
     for col in _MERGE_SUM_COLUMNS:
         merged_row[col] = sum(num_val(r, col) for r in rows)
+
+    # 運転時間: source run ごとに drive を解決してから合算（group total が 0 の時だけの救済は行わない）
+    def _resolve_drive_min(row: Dict[str, Any], rs: Dict[str, Any]) -> int:
+        v = row.get("運転時間")
+        if v is not None and v != "":
+            try:
+                n = int(v) if isinstance(v, (int, float)) else int(float(str(v).strip()))
+                if n >= 0:
+                    return n
+            except (ValueError, TypeError):
+                pass
+        mh = rs.get("merged_header") or {}
+        v = mh.get("走行状態_分")
+        if v is not None:
+            try:
+                n = int(v) if isinstance(v, (int, float)) else int(float(str(v).strip()))
+                if n >= 0:
+                    return n
+            except (ValueError, TypeError):
+                pass
+        v = mh.get("_merged_drive_min_initial")
+        if v is not None:
+            try:
+                n = int(v) if isinstance(v, (int, float)) else int(float(str(v).strip()))
+                if n >= 0:
+                    return n
+            except (ValueError, TypeError):
+                pass
+        return 0
+
+    resolved_source_drives: List[int] = []
+    parent_run_id = first.get("運行ID")
+    for i, (r, rs) in enumerate(zip(rows, run_states)):
+        row_drive_raw = r.get("運転時間")
+        mh = (rs.get("merged_header") or {})
+        header_drive = mh.get("走行状態_分")
+        header_initial = mh.get("_merged_drive_min_initial")
+        resolved = _resolve_drive_min(r, rs)
+        resolved_source_drives.append(resolved)
+        try:
+            _get_drive_compare_logger().info(
+                "MERGE_RUN_SOURCE_DRIVE parent_run_id=%s source_run_id=%s row_drive=%s header_drive=%s resolved_drive=%s",
+                parent_run_id,
+                mh.get("運行ID"),
+                row_drive_raw,
+                header_drive,
+                resolved,
+            )
+        except Exception:
+            pass
+    merged_drive_total = sum(resolved_source_drives)
+    merged_row["運転時間"] = merged_drive_total
+    try:
+        _get_drive_compare_logger().info(
+            "MERGE_RUN_TOTAL_DRIVE parent_run_id=%s resolved_source_drives=%s total=%s",
+            parent_run_id,
+            resolved_source_drives,
+            merged_drive_total,
+        )
+    except Exception:
+        pass
 
     # 運行間の区間を列挙（出庫順に並んでいるので、隣接ペアの間が運行間）
     gap_segments: List[Dict[str, Any]] = []  # { start, end, dur_min, day_min, night_min }
@@ -1319,6 +1547,32 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         + extra_keikai_pre_night
     )
 
+    # 拘束・休憩の統合ログ（rest_compare.log）
+    try:
+        source_ids = [str((rs.get("merged_header") or {}).get("運行ID") or "") for rs in run_states]
+        per_row_bind = [num_val(r, "拘束時間_分割前") for r in rows]
+        per_row_keikai = [num_val(r, "休憩時間_分割前") for r in rows]
+        _get_rest_compare_logger().info(
+            "MERGE_RUNS run_id=%s merged_source_ids=%s 拘束_合算=%s 休憩_合算(extra加算前)=%s 拘束_各row=%s 休憩_各row=%s",
+            merged_row.get("運行ID"),
+            source_ids,
+            sum(per_row_bind),
+            sum(per_row_keikai),
+            per_row_bind,
+            [num_val(r, "休憩時間_分割前") for r in rows],
+        )
+        _get_rest_compare_logger().info(
+            "MERGE_RUNS run_id=%s extra_休憩_昼=%s extra_休憩_夜=%s 拘束_分割前=%s 休憩_分割前=%s 休息時間=%s",
+            merged_row.get("運行ID"),
+            extra_keikai_pre_day,
+            extra_keikai_pre_night,
+            merged_row.get("拘束時間_分割前"),
+            merged_row.get("休憩時間_分割前"),
+            merged_row.get("休息時間"),
+        )
+    except Exception:
+        pass
+
     # 安全点数: 平均して四捨五入（1件でもあれば採用、なければ先頭行から転記）
     safe_scores = [float_val(r, "安全点数") for r in rows if r.get("安全点数") not in (None, "")]
     if safe_scores:
@@ -1335,7 +1589,10 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         merged_row[col] = None
 
     # merged_run_state: 統合行を再計算に使うため merged_header + merged_details（安全点数も持たせておく）
+    # 運転時間は上で source 単位解決済みの merged_drive_total を使用（merged_row["運転時間"] に既に設定済み）
     first_rs = run_states[0]
+    merged_drive = merged_row.get("運転時間")  # 上記 source 単位合算の結果
+    merged_source_ids = [str((rs.get("merged_header") or {}).get("運行ID") or "") for rs in run_states]
     merged_header = {
         "運行ID": merged_row["運行ID"],
         "運行日": merged_row["運行日"],
@@ -1350,8 +1607,10 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         "出庫日時": merged_row["出庫日時"],
         "帰庫日時": merged_row["帰庫日時"],
         "安全点数": merged_row.get("安全点数"),
-        # _merge_runs 直後の運転時間（分）。後続で rows_from_run_states() による再計算が入ったか比較するためのログ用。
-        "_merged_drive_min_initial": merged_row.get("運転時間"),
+        "走行状態_分": merged_drive,
+        "_merged_drive_min_initial": merged_drive,
+        "is_merged_run": True,
+        "merged_source_ids": merged_source_ids,
     }
     # 3時間以上紐づけのドロップダウン表示用：統合元のデジタコ出庫・帰庫の min/max を退避
     out_digitaco_dts = []
@@ -1391,6 +1650,14 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         "merged_details": all_details,
         "merged_row": merged_row,
     }
+    _get_drive_compare_logger().info(
+        "MERGE_RUNS_AFTER run_id=%s merged_source_ids=%s merged_row_drive=%s header_走行状態_分=%s header_initial=%s",
+        merged_header.get("運行ID"),
+        merged_source_ids,
+        merged_row.get("運転時間"),
+        merged_header.get("走行状態_分"),
+        merged_header.get("_merged_drive_min_initial"),
+    )
     return merged_row, merged_run_state
 
 

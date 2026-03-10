@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from storage.paths import ensure_dirs, APP_ROOT, COMPANIES_DIR, safe_name, job_input_dir, job_output_dir, job_state_path
 from storage.state import JobState, Artifacts, save_state, load_state
 from job_runner import run_job
-from engine.pipeline import complete_manual_input, apply_merge_decision, apply_alcohol_to_run_states, rows_from_run_states, _merge_runs, _write_excel as write_excel, _row_to_dt
+from engine.pipeline import complete_manual_input, apply_merge_decision, apply_alcohol_to_run_states, rows_from_run_states, _merge_runs, _write_excel as write_excel, _row_to_dt, log_merged_row_discard, _get_drive_compare_logger, _get_rest_compare_logger
 from engine.alcohol_integration import integrate_alcohol, alcohol_runs_by_crew, alcohol_only_crew_list, _normalize_crew_id as normalize_crew_id
 from uuid import uuid4
 
@@ -108,6 +108,31 @@ def _resolve_link_group_row_indices(
     if len(resolved) < 2:
         raise HTTPException(status_code=400, detail=f"各グループは2本以上の運行を指定してください。runIds={run_ids}")
     return resolved
+
+
+def _row_index_to_group_members(
+    row_index: int,
+    merge_sets: Optional[List[List[List[int]]]],
+    merge_groups: List[Dict[str, Any]],
+    merge_choices: List[bool],
+) -> List[int]:
+    """row_index が属する 3時間未満グループの全 rowIndex を返す。属していなければ [row_index] のみ。"""
+    if merge_sets is not None:
+        for sets in merge_sets:
+            for s in sets:
+                unique = sorted({int(i) for i in s if 0 <= int(i) < 10000})
+                if row_index in unique:
+                    return unique
+        return [row_index]
+    for gi, g in enumerate(merge_groups):
+        if gi >= len(merge_choices) or not merge_choices[gi]:
+            continue
+        indices = [int(i) for i in (g.get("rowIndices") or [])]
+        if row_index in indices:
+            return indices
+    return [row_index]
+
+
 def _apply_entries_to_run_states(
     run_states: List[Dict[str, Any]],
     entries: List[Dict[str, Any]],
@@ -115,7 +140,8 @@ def _apply_entries_to_run_states(
     merge_choices: List[bool],
     merge_sets: Optional[List[List[List[int]]]] = None,
 ) -> None:
-    """手入力 entries を run_states に反映する。入力した行（row_index）のみ更新し、同一運行グループの他行には流さない。"""
+    """手入力 entries を run_states に反映する。入力した行（rowIndex）の run_state だけを更新する。
+    代表入力は兄弟行へ展開せず、統合後の merged 1行へだけ適用するため complete_manual では呼ばず _do_merge_and_excel 内で適用する。"""
     if not entries:
         return
 
@@ -133,9 +159,26 @@ def _apply_entries_to_run_states(
             mh["出庫日時"] = out_dt
             mh["帰庫日時"] = in_dt
 
-        # ここが重要:
-        # merged_row は拘束時間などの計算済みキャッシュなので、
-        # 出庫/帰庫を変えたら必ず捨てる
+        # 統合済みの運転時間は header に退避してから破棄する（再計算 fallback で膨張しないように）
+        mr = rs.get("merged_row")
+        drive_before = None
+        if mr is not None:
+            drive_before = mr.get("運転時間")
+            if drive_before is not None and mh is not None:
+                try:
+                    n = int(drive_before) if isinstance(drive_before, (int, float)) else int(float(str(drive_before).strip()))
+                    if n >= 0:
+                        mh["走行状態_分"] = n
+                        mh["_merged_drive_min_initial"] = n
+                except (ValueError, TypeError):
+                    pass
+            log_merged_row_discard(
+                mh.get("運行ID") if mh else None,
+                "manual_entry",
+                drive_before,
+                mh.get("走行状態_分") if mh else None,
+                mh.get("_merged_drive_min_initial") if mh else None,
+            )
         rs["merged_row"] = None
 
 
@@ -145,7 +188,8 @@ def _pending_rows_with_group_collapse(
     merge_choices: List[bool],
     merge_sets: Optional[List[List[List[int]]]] = None,
 ) -> List[Dict[str, Any]]:
-    """出庫・帰庫が未取得の行を列挙する。②で「同一運行」にしたグループは代表1行だけ入れる。"""
+    """出庫・帰庫が未取得の行を列挙する。②で「同一運行」にしたグループは代表1行だけ入れる。
+    代表入力は兄弟行へは配らず、3時間未満統合後の merged 1行にだけ適用する。"""
     missing = [
         {"rowIndex": i, "運行ID": r.get("運行ID"), "乗務員ID": r.get("乗務員ID"), "乗務員名": r.get("乗務員名"), "運行日": _run_date_from_row(r), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
         for i, r in enumerate(new_rows)
@@ -670,6 +714,32 @@ def _after_link_decision(
                     "帰庫日時": link.get("帰庫日時") or "",
                 })
     if pending_rows:
+        # 手入力送信直前ログ: どの rowIndex が代表に collapse されたか
+        original_missing = [i for i, r in enumerate(new_rows) if not r.get("出庫日時") or not r.get("帰庫日時")]
+        kept = [p["rowIndex"] for p in pending_rows]
+        collapse_map: Dict[int, List[int]] = {}
+        if merge_sets is not None:
+            for sets in merge_sets:
+                for s in sets:
+                    missing_in_s = [i for i in s if i in set(original_missing)]
+                    if len(missing_in_s) >= 2:
+                        rep = min(missing_in_s)
+                        collapse_map[rep] = missing_in_s
+        else:
+            for gi, g in enumerate(merge_groups):
+                if gi >= len(merge_choices) or not merge_choices[gi]:
+                    continue
+                indices = set(g.get("rowIndices") or [])
+                missing_in_s = [i for i in indices if i in set(original_missing)]
+                if len(missing_in_s) >= 2:
+                    rep = min(missing_in_s)
+                    collapse_map[rep] = missing_in_s
+        _get_drive_compare_logger().info(
+            "PENDING_COLLAPSE original_missing=%s kept=%s map=%s",
+            original_missing,
+            kept,
+            collapse_map,
+        )
         inp_dir = job_input_dir(jobId)
         alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
         alc_runs = alcohol_runs_by_crew(alcohol_events) if alcohol_events else {}
@@ -725,17 +795,115 @@ def _do_merge_and_excel(
     merge_sets: Optional[List[List[List[int]]]] = None,
     link_groups: Optional[List[Dict[str, Any]]] = None,
     from_complete_manual: bool = False,
+    manual_entries: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """⑤: 3h未満グループ合算 → 3h以上ペア/グループ合算 → 未取得があれば手入力、なければ Excel 出力。同乗者行を末尾に追加。from_complete_manual のときは未入力行があっても再手入力に戻さず Excel 出力する。"""
+    """⑤: 3h未満グループ合算 → 3h以上ペア/グループ合算 → 未取得があれば手入力、なければ Excel 出力。同乗者行を末尾に追加。from_complete_manual のときは未入力行があっても再手入力に戻さず Excel 出力する。manual_entries がある場合は 3時間未満統合後の merged 1行にだけ代表入力を適用する。"""
     out_dir = job_output_dir(jobId)
     manual_path = out_dir / "manual_input_state.json"
     preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
     codriver_links = codriver_links or []
     if not preset_path.exists():
         raise HTTPException(status_code=400, detail="プリセットが見つかりません。")
+    # 代表入力の rowIndex → 統合前 run_id の対応（統合後にどの merged run に適用するか判定する用）
+    row_index_to_run_id: Dict[int, str] = {}
+    if manual_entries:
+        for i in range(len(run_states)):
+            mh = (run_states[i] or {}).get("merged_header") or {}
+            rid = mh.get("運行ID")
+            if rid is not None and str(rid).strip():
+                row_index_to_run_id[i] = _normalize_run_id(str(rid))
+    # 3時間未満統合直前: 各 run の出庫・帰庫・走行状態_分をログ（反映漏れ/統合漏れの切り分け用）
+    for i, rs in enumerate(run_states):
+        mh = rs.get("merged_header") or {}
+        _get_drive_compare_logger().info(
+            "DO_MERGE_BEFORE_3H_UNDER rowIndex=%s run_id=%s 出庫日時=%s 帰庫日時=%s 走行状態_分=%s",
+            i,
+            mh.get("運行ID"),
+            mh.get("出庫日時"),
+            mh.get("帰庫日時"),
+            mh.get("走行状態_分"),
+        )
     run_states, new_rows = apply_merge_decision(
         run_states, headers, merge_groups, merge_choices, preset_path, state.device, run_date_choices, merge_sets=merge_sets
     )
+    # ログ B: 3時間未満統合直後の各 merged run
+    for j, rs in enumerate(run_states):
+        mr = rs.get("merged_row")
+        mh = rs.get("merged_header") or {}
+        _get_drive_compare_logger().info(
+            "DO_MERGE_AFTER_3H_UNDER idx=%s merged_source_ids=%s 運転時間=%s 拘束_分割前=%s 出庫=%s 帰庫=%s",
+            j,
+            mh.get("merged_source_ids"),
+            mr.get("運転時間") if mr else None,
+            mr.get("拘束時間_分割前") if mr else None,
+            mh.get("出庫日時"),
+            mh.get("帰庫日時"),
+        )
+    # 代表入力を統合後の merged 1行にだけ適用（兄弟行には配らない）
+    if manual_entries and row_index_to_run_id:
+        for e in manual_entries:
+            source_row = int(e.get("rowIndex", -1))
+            run_id = row_index_to_run_id.get(source_row)
+            if run_id is None:
+                continue
+            out_dt = (e.get("出庫日時") or "").strip() or None
+            in_dt = (e.get("帰庫日時") or "").strip() or None
+            if not out_dt and not in_dt:
+                continue
+            # この run_id を含む merged run を探す（運行ID 一致 or merged_source_ids に含まれる）
+            for j, rs in enumerate(run_states):
+                mh = rs.get("merged_header") or {}
+                rid = mh.get("運行ID")
+                if rid is not None and _normalize_run_id(str(rid)) == run_id:
+                    break
+                ids = mh.get("merged_source_ids") or []
+                if any(_normalize_run_id(str(x)) == run_id for x in ids):
+                    break
+            else:
+                continue
+            rs = run_states[j]
+            mh = rs.get("merged_header") or {}
+            source_group = _row_index_to_group_members(source_row, merge_sets, merge_groups, merge_choices)
+            merged_run_id = mh.get("運行ID")
+            _get_drive_compare_logger().info(
+                "POST_MERGE_MANUAL_APPLY source_row=%s source_group=%s merged_run_id=%s 出庫=%s 帰庫=%s",
+                source_row,
+                source_group,
+                merged_run_id,
+                out_dt,
+                in_dt,
+            )
+            if out_dt is not None:
+                mh["出庫日時"] = out_dt
+            if in_dt is not None:
+                mh["帰庫日時"] = in_dt
+            # merged_row を破棄して再計算させる（運転時間は header 退避済みのため _apply_merged_drive_override で復元される）
+            mr = rs.get("merged_row")
+            if mr is not None and mh.get("走行状態_分") is None and mh.get("_merged_drive_min_initial") is None:
+                try:
+                    d = mr.get("運転時間")
+                    if d is not None:
+                        n = int(d) if isinstance(d, (int, float)) else int(float(str(d).strip()))
+                        if n >= 0:
+                            mh["走行状態_分"] = n
+                            mh["_merged_drive_min_initial"] = n
+                except (ValueError, TypeError):
+                    pass
+            rs["merged_row"] = None
+        new_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
+        # ログ D: 再計算後の merged run ごとの 運転時間・拘束・休憩・休息
+        for j, rs in enumerate(run_states):
+            mh = rs.get("merged_header") or {}
+            if mh.get("merged_source_ids") or mh.get("is_merged_run"):
+                row = new_rows[j] if j < len(new_rows) else {}
+                _get_rest_compare_logger().info(
+                    "POST_MERGE_RECOMPUTED run_id=%s 運転時間=%s 拘束_分割前=%s 休憩_分割前=%s 休息時間=%s",
+                    mh.get("運行ID"),
+                    row.get("運転時間"),
+                    row.get("拘束時間_分割前"),
+                    row.get("休憩時間_分割前"),
+                    row.get("休息時間"),
+                )
     # link_groups: 各要素は { "runIds": [id1, id2, ...], "運行日を": 0 }（運行日をは採用する運行のインデックス 0-based）
     if link_groups is None:
         link_groups = []
@@ -795,6 +963,12 @@ def _do_merge_and_excel(
         run_states = next_run_states
         new_rows = next_new_rows
         run_id_to_index = {_normalize_run_id(str(r.get("運行ID") or "")): idx for idx, r in enumerate(new_rows)}
+        # 3時間以上統合直後のログ（pipeline の MERGE_RUNS_AFTER に加え、ここでも記録）
+        _get_drive_compare_logger().info(
+            "DO_MERGE_AFTER_3H_OVER 運転時間=%s merged_source_ids=%s",
+            merged_row.get("運転時間"),
+            merged_rs.get("merged_header", {}).get("merged_source_ids"),
+        )
     missing = [
         {"rowIndex": i, "運行ID": r.get("運行ID"), "乗務員ID": r.get("乗務員ID"), "乗務員名": r.get("乗務員名"), "運行日": _run_date_from_row(r), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
         for i, r in enumerate(new_rows)
@@ -1193,79 +1367,41 @@ def complete_manual(jobId: str, body: Dict[str, Any] = Body(...)):
 
     effective_merge_sets = _normalize_merge_sets(merge_groups, merge_choices, merge_sets)
 
-    if merge_groups or link_pairs or link_groups:
-        target_run_states = run_states
-        target_entries = driver_entries
-        target_codriver_links = codriver_links
-
-        if merge_groups:
-            target_run_states, _ = apply_merge_decision(
-                run_states,
-                headers,
-                merge_groups,
-                merge_choices,
-                preset_path,
-                state.device,
-                run_date_choices,
-                merge_sets=effective_merge_sets,
-            )
-            index_map = _original_to_merged_index_map(len(run_states), effective_merge_sets)
-            target_entries = _remap_entries_row_index(driver_entries, index_map)
-            target_codriver_links = _remap_codriver_links_row_index(codriver_links, index_map)
-
-        _apply_entries_to_run_states(target_run_states, target_entries, [], [], None)
-
-        # 手入力経由では link_groups の runRowIndices が無い/ずれている場合があるので、post-merge 行一覧で再解決する
-        if link_groups:
-            _rows_after_merge = rows_from_run_states(target_run_states, headers, preset_path, state.device)
-            run_id_to_idx = {_normalize_run_id(str(r.get("運行ID") or "")): i for i, r in enumerate(_rows_after_merge)}
-            for grp in link_groups:
-                if grp.get("runRowIndices") is not None and len(grp.get("runRowIndices") or []) >= 2:
-                    _indices = [int(i) for i in (grp.get("runRowIndices") or []) if 0 <= int(i) < len(_rows_after_merge)]
-                    if len(_indices) >= 2:
-                        continue
-                run_ids = [str(rid or "").strip() for rid in (grp.get("runIds") or []) if str(rid or "").strip()]
-                run_ids = list(dict.fromkeys(run_ids))
-                if len(run_ids) < 2:
-                    continue
-                indices = []
-                for rid in run_ids:
-                    rid_norm = _normalize_run_id(rid)
-                    if rid_norm in run_id_to_idx:
-                        indices.append(run_id_to_idx[rid_norm])
-                indices = sorted(set(indices))
-                if len(indices) >= 2:
-                    grp["runRowIndices"] = indices
-
-        return _do_merge_and_excel(
-            jobId,
-            sp,
-            state,
-            target_run_states,
-            headers,
-            [],
-            [],
-            [],
-            link_pairs,
-            target_codriver_links,
-            None,
-            link_groups=link_groups,
-            from_complete_manual=True,
+    # ログ A: complete_manual 受信直後（代表入力は統合後1行へだけ適用する）
+    _get_drive_compare_logger().info(
+        "COMPLETE_MANUAL_START run_states=%s driver_entries=%s entries=%s",
+        len(run_states),
+        len(driver_entries),
+        [{"rowIndex": e.get("rowIndex"), "出庫日時": (e.get("出庫日時") or "").strip() or None, "帰庫日時": (e.get("帰庫日時") or "").strip() or None} for e in driver_entries],
+    )
+    for e in driver_entries:
+        row_index = int(e.get("rowIndex", -1))
+        if row_index < 0 or row_index >= len(run_states):
+            continue
+        group_members = _row_index_to_group_members(row_index, effective_merge_sets, merge_groups, merge_choices)
+        _get_drive_compare_logger().info(
+            "COMPLETE_MANUAL_ENTRY rowIndex=%s group_members=%s apply_to=統合後行のみ",
+            row_index,
+            group_members,
         )
 
-    excel_path = out_dir / "output.xlsx"
-    if codriver_links:
-        _apply_entries_to_run_states(run_states, driver_entries, [], [], effective_merge_sets)
-        rows = rows_from_run_states(run_states, headers, preset_path, state.device)
-        rows = rows + _build_codriver_rows(rows, codriver_links)
-        write_excel(headers, rows, excel_path)
-    else:
-        complete_manual_input(run_states, headers, driver_entries, preset_path, state.device, excel_path)
-    state.status = "succeeded"
-    state.pendingRows = None
-    state.artifacts = Artifacts(excel=True, log=True, skipped=True)
-    save_state(sp, state)
-    return {"ok": True, "status": "succeeded", "message": "手入力を反映し、Excel を出力しました。"}
+    # 代表入力は元 run_states へ展開せず、_do_merge_and_excel 内で 3時間未満統合後の merged 1行にだけ適用する
+    return _do_merge_and_excel(
+        jobId,
+        sp,
+        state,
+        run_states,
+        headers,
+        merge_groups,
+        merge_choices,
+        run_date_choices,
+        link_pairs,
+        codriver_links,
+        effective_merge_sets,
+        link_groups=link_groups,
+        from_complete_manual=True,
+        manual_entries=driver_entries,
+    )
 
 
 def _artifact_path(jobId: str, kind: str) -> Path:
