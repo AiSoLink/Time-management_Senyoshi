@@ -56,6 +56,17 @@ def _normalize_run_id(rid: str) -> str:
     return s
 
 
+def _link_groups_have_multi_run_merge(link_groups: Optional[List[Dict[str, Any]]]) -> bool:
+    """3時間以上の紐づけで、2本以上を1運行にまとめる指定があるか（この場合のみアルコール突合を統合後に遅延する）。"""
+    if not link_groups:
+        return False
+    for g in link_groups:
+        ids = [str(x or "").strip() for x in (g.get("runIds") or []) if str(x or "").strip()]
+        if len(ids) >= 2:
+            return True
+    return False
+
+
 def _driver_row_payload(i: int, rs: Dict[str, Any]) -> Dict[str, Any]:
     mh = rs.get("merged_header") or {}
     return {
@@ -803,8 +814,9 @@ def _after_link_decision(
     came_from: Optional[str] = None,
     link_groups: Optional[List[Dict[str, Any]]] = None,
     link_runs: Optional[List[Dict[str, Any]]] = None,
+    defer_alcohol_after_3h_over_link: bool = False,
 ) -> Dict[str, Any]:
-    """②-2 後: アルコール突合済み・合算前。出庫・帰庫未取得があれば B リストで手入力へ、なければ ⑤ 実行して Excel。came_from は手入力画面から「1つ前」で戻る先。link_runs はデジタコの出庫・帰庫で組んだリスト（戻ったときに再表示するため保持）。"""
+    """②-2 後: 通常はアルコール突合済み・合算前。3時間以上で複数運行をまとめる場合は突合を ⑤ 内の統合後に遅延する。出庫・帰庫未取得があれば B リストへ。came_from は手入力から「1つ前」で戻る先。link_runs は再表示用。"""
     out_dir = job_output_dir(jobId)
     manual_path = out_dir / "manual_input_state.json"
     pending_rows = _pending_rows_with_group_collapse(new_rows, merge_groups, merge_choices, merge_sets)
@@ -907,7 +919,21 @@ def _after_link_decision(
         state.artifacts = Artifacts(excel=False, log=True, skipped=True)
         save_state(sp, state)
         return {"ok": True, "message": "出庫・帰庫が未取得の行があるため、手入力をお願いします。"}
-    return _do_merge_and_excel(jobId, sp, state, run_states, headers, merge_groups, merge_choices, run_date_choices, link_pairs, codriver_links, merge_sets, link_groups=link_groups)
+    return _do_merge_and_excel(
+        jobId,
+        sp,
+        state,
+        run_states,
+        headers,
+        merge_groups,
+        merge_choices,
+        run_date_choices,
+        link_pairs,
+        codriver_links,
+        merge_sets,
+        link_groups=link_groups,
+        defer_alcohol_after_3h_over_link=defer_alcohol_after_3h_over_link,
+    )
 
 
 def _do_merge_and_excel(
@@ -925,8 +951,9 @@ def _do_merge_and_excel(
     link_groups: Optional[List[Dict[str, Any]]] = None,
     from_complete_manual: bool = False,
     manual_entries: Optional[List[Dict[str, Any]]] = None,
+    defer_alcohol_after_3h_over_link: bool = False,
 ) -> Dict[str, Any]:
-    """⑤: 3h未満グループ合算 → 3h以上ペア/グループ合算 → 未取得があれば手入力、なければ Excel 出力。同乗者行を末尾に追加。from_complete_manual のときは未入力行があっても再手入力に戻さず Excel 出力する。manual_entries がある場合は 3時間未満統合後の merged 1行にだけ代表入力を適用する。"""
+    """⑤: 3h未満グループ合算 → 3h以上ペア/グループ合算 →（複数運行紐づけ時はこの後にアルコール突合）→ 未取得があれば手入力、なければ Excel。同乗者行を末尾に追加。from_complete_manual のときは未入力行があっても再手入力に戻さず Excel 出力。manual_entries は 3時間未満統合後の merged 1行にだけ代表入力。"""
     out_dir = job_output_dir(jobId)
     manual_path = out_dir / "manual_input_state.json"
     preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
@@ -1098,6 +1125,13 @@ def _do_merge_and_excel(
             merged_row.get("運転時間"),
             merged_rs.get("merged_header", {}).get("merged_source_ids"),
         )
+    # 複数運行を3時間以上で1本にまとめたあと、統合後の出庫・帰庫でアルコール突合する（突合前は未実施のまま）
+    if defer_alcohol_after_3h_over_link:
+        inp_dir_alc = job_input_dir(jobId)
+        alcohol_events_after_link = integrate_alcohol(inp_dir_alc / "taimen", inp_dir_alc / "alcohol")
+        if alcohol_events_after_link:
+            apply_alcohol_to_run_states(run_states, alcohol_events_after_link, margin_minutes=120)
+        new_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
     missing = [
         {
             "rowIndex": i,
@@ -1294,6 +1328,7 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
                 "運行日を": 0 if use_first else 1,
             })
         link_groups_arg = resolved_groups
+    defer_alcohol_after_3h_over_link = _link_groups_have_multi_run_merge(link_groups_arg)
     inp_dir = job_input_dir(jobId)
     alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
     if alcohol_events:
@@ -1316,13 +1351,15 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
             state.artifacts = Artifacts(excel=False, log=True, skipped=True)
             save_state(sp, state)
             return {"ok": True, "status": "codriver_link_required", "message": "アルコールのデータのみの乗務員がいます。同乗者としてどの運行に紐づけますか？"}
-        apply_alcohol_to_run_states(run_states, alcohol_events, margin_minutes=120)
+        if not defer_alcohol_after_3h_over_link:
+            apply_alcohol_to_run_states(run_states, alcohol_events, margin_minutes=120)
     new_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
     return _after_link_decision(
         jobId, sp, state, run_states, headers, new_rows,
         merge_groups, merge_choices, run_date_choices, pairs, merge_sets=merge_sets, came_from="link_decision_required",
         link_groups=link_groups_arg,
         link_runs=data.get("linkRuns"),
+        defer_alcohol_after_3h_over_link=defer_alcohol_after_3h_over_link,
     )
 
 
@@ -1348,6 +1385,7 @@ def complete_codriver_skip(jobId: str):
     run_date_choices = data.get("runDateChoices") or []
     link_pairs = data.get("linkPairs") or []
     link_groups = data.get("linkGroups")
+    defer_alcohol_after_3h_over_link = _link_groups_have_multi_run_merge(link_groups)
     if not run_states or not headers:
         raise HTTPException(status_code=400, detail="手入力状態が不正です。")
     preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
@@ -1356,13 +1394,15 @@ def complete_codriver_skip(jobId: str):
     inp_dir = job_input_dir(jobId)
     alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
     if alcohol_events:
-        apply_alcohol_to_run_states(run_states, alcohol_events, margin_minutes=120)
+        if not defer_alcohol_after_3h_over_link:
+            apply_alcohol_to_run_states(run_states, alcohol_events, margin_minutes=120)
     new_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
     return _after_link_decision(
         jobId, sp, state, run_states, headers, new_rows,
         merge_groups, merge_choices, run_date_choices, link_pairs, [], merge_sets=merge_sets, came_from="codriver_link_required",
         link_groups=link_groups,
         link_runs=data.get("linkRuns"),
+        defer_alcohol_after_3h_over_link=defer_alcohol_after_3h_over_link,
     )
 
 
@@ -1388,6 +1428,7 @@ def complete_codriver_link(jobId: str, body: Dict[str, Any] = Body(...)):
     run_date_choices = data.get("runDateChoices") or []
     link_pairs = data.get("linkPairs") or []
     link_groups = data.get("linkGroups")
+    defer_alcohol_after_3h_over_link = _link_groups_have_multi_run_merge(link_groups)
     alcohol_only_crew = data.get("alcoholOnlyCrew") or []
     if not run_states or not headers:
         raise HTTPException(status_code=400, detail="手入力状態が不正です。")
@@ -1436,13 +1477,15 @@ def complete_codriver_link(jobId: str, body: Dict[str, Any] = Body(...)):
     inp_dir = job_input_dir(jobId)
     alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
     if alcohol_events:
-        apply_alcohol_to_run_states(run_states, alcohol_events, margin_minutes=120)
+        if not defer_alcohol_after_3h_over_link:
+            apply_alcohol_to_run_states(run_states, alcohol_events, margin_minutes=120)
     new_rows = rows_from_run_states(run_states, headers, preset_path, state.device)
     return _after_link_decision(
         jobId, sp, state, run_states, headers, new_rows,
         merge_groups, merge_choices, run_date_choices, link_pairs, resolved, merge_sets=merge_sets, came_from="codriver_link_required",
         link_groups=link_groups,
         link_runs=data.get("linkRuns"),
+        defer_alcohol_after_3h_over_link=defer_alcohol_after_3h_over_link,
     )
 
 
@@ -1476,6 +1519,7 @@ def complete_manual(jobId: str, body: Dict[str, Any] = Body(...)):
     run_date_choices = data.get("runDateChoices") or []
     link_pairs = data.get("linkPairs") or []
     link_groups = data.get("linkGroups")
+    defer_alcohol_after_3h_over_link = _link_groups_have_multi_run_merge(link_groups)
     codriver_links = data.get("codriverLinks") or []
     codriver_start_index = data.get("codriverStartIndex")
     codriver_pending_indices = data.get("codriverPendingIndices")
@@ -1529,6 +1573,7 @@ def complete_manual(jobId: str, body: Dict[str, Any] = Body(...)):
         link_groups=link_groups,
         from_complete_manual=True,
         manual_entries=driver_entries,
+        defer_alcohol_after_3h_over_link=defer_alcohol_after_3h_over_link,
     )
 
 
