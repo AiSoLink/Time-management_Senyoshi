@@ -21,7 +21,19 @@ from fastapi.staticfiles import StaticFiles
 from storage.paths import ensure_dirs, APP_ROOT, COMPANIES_DIR, safe_name, job_input_dir, job_output_dir, job_state_path
 from storage.state import JobState, Artifacts, save_state, load_state
 from job_runner import run_job
-from engine.pipeline import complete_manual_input, apply_merge_decision, apply_alcohol_to_run_states, rows_from_run_states, _merge_runs, _write_excel as write_excel, _row_to_dt, log_merged_row_discard, _get_drive_compare_logger, _get_rest_compare_logger
+from engine.pipeline import (
+    complete_manual_input,
+    apply_merge_decision,
+    apply_alcohol_to_run_states,
+    rows_from_run_states,
+    _merge_runs,
+    _write_excel as write_excel,
+    _row_to_dt,
+    log_merged_row_discard,
+    _get_drive_compare_logger,
+    _get_rest_compare_logger,
+    vehicle_plate_display,
+)
 from engine.alcohol_integration import integrate_alcohol, alcohol_runs_by_crew, alcohol_only_crew_list, _normalize_crew_id as normalize_crew_id
 from uuid import uuid4
 
@@ -44,6 +56,19 @@ def _normalize_run_id(rid: str) -> str:
     return s
 
 
+def _driver_row_payload(i: int, rs: Dict[str, Any]) -> Dict[str, Any]:
+    mh = rs.get("merged_header") or {}
+    return {
+        "rowIndex": i,
+        "運行ID": mh.get("運行ID"),
+        "乗務員ID": mh.get("乗務員ID"),
+        "乗務員名": mh.get("乗務員名"),
+        "車番": vehicle_plate_display(mh.get("車両番号")),
+        "出庫日時": mh.get("出庫日時") or "",
+        "帰庫日時": mh.get("帰庫日時") or "",
+    }
+
+
 def _link_runs_after_merge(
     run_states: List[Dict[str, Any]],
     headers: List[str],
@@ -59,7 +84,15 @@ def _link_runs_after_merge(
     if merge_sets is None:
         link_rows = rows_from_run_states(run_states, headers, preset_path, device)
         return [
-            {"rowIndex": i, "運行ID": r.get("運行ID"), "運行日": r.get("運行日"), "乗務員名": r.get("乗務員名"), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
+            {
+                "rowIndex": i,
+                "運行ID": r.get("運行ID"),
+                "運行日": r.get("運行日"),
+                "乗務員名": r.get("乗務員名"),
+                "車番": vehicle_plate_display(r.get("車両番号")),
+                "出庫日時": r.get("出庫日時") or "",
+                "帰庫日時": r.get("帰庫日時") or "",
+            }
             for i, r in enumerate(link_rows)
         ]
     _, new_rows = apply_merge_decision(
@@ -72,6 +105,7 @@ def _link_runs_after_merge(
             "運行ID": r.get("運行ID"),
             "運行日": r.get("運行日"),
             "乗務員名": r.get("乗務員名"),
+            "車番": vehicle_plate_display(r.get("車両番号")),
             "出庫日時": r.get("出庫日時") or "",
             "帰庫日時": r.get("帰庫日時") or "",
         }
@@ -193,7 +227,16 @@ def _pending_rows_with_group_collapse(
     """出庫・帰庫が未取得の行を列挙する。②で「同一運行」にしたグループは代表1行だけ入れる。
     代表入力は兄弟行へは配らず、3時間未満統合後の merged 1行にだけ適用する。"""
     missing = [
-        {"rowIndex": i, "運行ID": r.get("運行ID"), "乗務員ID": r.get("乗務員ID"), "乗務員名": r.get("乗務員名"), "運行日": _run_date_from_row(r), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
+        {
+            "rowIndex": i,
+            "運行ID": r.get("運行ID"),
+            "乗務員ID": r.get("乗務員ID"),
+            "乗務員名": r.get("乗務員名"),
+            "車番": vehicle_plate_display(r.get("車両番号")),
+            "運行日": _run_date_from_row(r),
+            "出庫日時": r.get("出庫日時") or "",
+            "帰庫日時": r.get("帰庫日時") or "",
+        }
         for i, r in enumerate(new_rows)
         if not r.get("出庫日時") or not r.get("帰庫日時")
     ]
@@ -412,6 +455,22 @@ def _append_server_error_log(text: str) -> None:
         pass
 
 
+def _user_friendly_summary(exc: Exception) -> Optional[str]:
+    """未捕捉例外を、画面向けの短い日本語に変換できる場合のみ返す（処理ロジックは変えない）。"""
+    msg = str(exc)
+    if isinstance(exc, ValueError):
+        if "hour must be in 0..23" in msg or "minute must be in 0..59" in msg:
+            pdf_m = re.search(r"参照PDF=([^\\s。]+)", msg)
+            pdf = (pdf_m.group(1).strip() if pdf_m else "") or ""
+            base = (
+                "PDFの運行明細に、時刻として正しくない値（時は0〜23、分は0〜59）が含まれています。"
+            )
+            if pdf:
+                return f"{base} まずファイル「{pdf}」の明細を確認してください。"
+            return base + "該当する日報PDFの明細行の時刻が、読み取りで壊れていないか確認してください。"
+    return None
+
+
 @app.exception_handler(Exception)
 async def _friendly_unhandled_exception_handler(request: Request, exc: Exception):
     """HTTPException / RequestValidationError は従来どおり。それ以外は分かりやすい JSON とログを返す。"""
@@ -433,13 +492,15 @@ async def _friendly_unhandled_exception_handler(request: Request, exc: Exception
     except Exception:
         pass
 
+    summary = _user_friendly_summary(exc)
     return JSONResponse(
         status_code=500,
         content={
             "detail": (
                 "サーバー側で予期しないエラーが発生しました（処理は中断されました）。"
-                "exe を使っている場合は、exe と同じフォルダの TimeManagement_api_error.log に原因のメモが残ります。"
+                "詳細はログファイルを確認してください。"
             ),
+            "userSummary": summary,
             "errorId": err_id,
             "exceptionType": type(exc).__name__,
             "message": str(exc),
@@ -718,10 +779,7 @@ def revert_step(jobId: str):
             if run_states and alcohol_events:
                 crew_in_digitaco = _crew_ids_in_run_states(run_states)
                 alcohol_only = alcohol_only_crew_list(alcohol_events, crew_in_digitaco)
-                driver_rows = [
-                    {"rowIndex": i, "運行ID": (rs.get("merged_header") or {}).get("運行ID"), "乗務員ID": (rs.get("merged_header") or {}).get("乗務員ID"), "乗務員名": (rs.get("merged_header") or {}).get("乗務員名"), "出庫日時": (rs.get("merged_header") or {}).get("出庫日時") or "", "帰庫日時": (rs.get("merged_header") or {}).get("帰庫日時") or ""}
-                    for i, rs in enumerate(run_states)
-                ]
+                driver_rows = [_driver_row_payload(i, rs) for i, rs in enumerate(run_states)]
                 data["alcoholOnlyCrew"] = alcohol_only
                 data["driverRows"] = driver_rows
                 manual_path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -783,6 +841,7 @@ def _after_link_decision(
                     "運行ID": run_id,
                     "乗務員ID": crew_id,
                     "乗務員名": link.get("乗務員名"),
+                    "車番": vehicle_plate_display(mh.get("車両番号")),
                     "運行日": mh.get("運行日"),
                     "出庫日時": link.get("出庫日時") or "",
                     "帰庫日時": link.get("帰庫日時") or "",
@@ -818,11 +877,7 @@ def _after_link_decision(
         alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
         alc_runs = alcohol_runs_by_crew(alcohol_events) if alcohol_events else {}
         pending_indices = {p["rowIndex"] for p in pending_rows}
-        driver_rows = [
-            {"rowIndex": i, "運行ID": (rs.get("merged_header") or {}).get("運行ID"), "乗務員ID": (rs.get("merged_header") or {}).get("乗務員ID"), "乗務員名": (rs.get("merged_header") or {}).get("乗務員名"), "出庫日時": (rs.get("merged_header") or {}).get("出庫日時") or "", "帰庫日時": (rs.get("merged_header") or {}).get("帰庫日時") or ""}
-            for i, rs in enumerate(run_states)
-            if i not in pending_indices
-        ]
+        driver_rows = [_driver_row_payload(i, rs) for i, rs in enumerate(run_states) if i not in pending_indices]
         manual_data: Dict[str, Any] = {
             "run_states": run_states,
             "headers": headers,
@@ -1044,7 +1099,16 @@ def _do_merge_and_excel(
             merged_rs.get("merged_header", {}).get("merged_source_ids"),
         )
     missing = [
-        {"rowIndex": i, "運行ID": r.get("運行ID"), "乗務員ID": r.get("乗務員ID"), "乗務員名": r.get("乗務員名"), "運行日": _run_date_from_row(r), "出庫日時": r.get("出庫日時") or "", "帰庫日時": r.get("帰庫日時") or ""}
+        {
+            "rowIndex": i,
+            "運行ID": r.get("運行ID"),
+            "乗務員ID": r.get("乗務員ID"),
+            "乗務員名": r.get("乗務員名"),
+            "車番": vehicle_plate_display(r.get("車両番号")),
+            "運行日": _run_date_from_row(r),
+            "出庫日時": r.get("出庫日時") or "",
+            "帰庫日時": r.get("帰庫日時") or "",
+        }
         for i, r in enumerate(new_rows)
         if not r.get("出庫日時") or not r.get("帰庫日時")
     ]
@@ -1054,11 +1118,7 @@ def _do_merge_and_excel(
         alcohol_events = integrate_alcohol(inp_dir / "taimen", inp_dir / "alcohol")
         alc_runs = alcohol_runs_by_crew(alcohol_events) if alcohol_events else {}
         pending_indices = {p["rowIndex"] for p in missing}
-        driver_rows = [
-            {"rowIndex": i, "運行ID": (rs.get("merged_header") or {}).get("運行ID"), "乗務員ID": (rs.get("merged_header") or {}).get("乗務員ID"), "乗務員名": (rs.get("merged_header") or {}).get("乗務員名"), "出庫日時": (rs.get("merged_header") or {}).get("出庫日時") or "", "帰庫日時": (rs.get("merged_header") or {}).get("帰庫日時") or ""}
-            for i, rs in enumerate(run_states)
-            if i not in pending_indices
-        ]
+        driver_rows = [_driver_row_payload(i, rs) for i, rs in enumerate(run_states) if i not in pending_indices]
         manual_data = {
             "run_states": run_states,
             "headers": headers,
@@ -1137,10 +1197,7 @@ def complete_link_skip(jobId: str):
         crew_in_digitaco = _crew_ids_in_run_states(run_states)
         alcohol_only = alcohol_only_crew_list(alcohol_events, crew_in_digitaco)
         if alcohol_only:
-            driver_rows = [
-                {"rowIndex": i, "運行ID": (rs.get("merged_header") or {}).get("運行ID"), "乗務員ID": (rs.get("merged_header") or {}).get("乗務員ID"), "乗務員名": (rs.get("merged_header") or {}).get("乗務員名"), "出庫日時": (rs.get("merged_header") or {}).get("出庫日時") or "", "帰庫日時": (rs.get("merged_header") or {}).get("帰庫日時") or ""}
-                for i, rs in enumerate(run_states)
-            ]
+            driver_rows = [_driver_row_payload(i, rs) for i, rs in enumerate(run_states)]
             manual_data = {"run_states": run_states, "headers": headers, "mergeGroups": merge_groups, "runDateChoices": run_date_choices, "linkPairs": [], "alcoholOnlyCrew": alcohol_only, "driverRows": driver_rows}
             if data.get("linkRuns") is not None:
                 manual_data["linkRuns"] = data["linkRuns"]
@@ -1243,10 +1300,7 @@ def complete_link_pairs(jobId: str, body: Dict[str, Any] = Body(...)):
         crew_in_digitaco = _crew_ids_in_run_states(run_states)
         alcohol_only = alcohol_only_crew_list(alcohol_events, crew_in_digitaco)
         if alcohol_only:
-            driver_rows = [
-                {"rowIndex": i, "運行ID": (rs.get("merged_header") or {}).get("運行ID"), "乗務員ID": (rs.get("merged_header") or {}).get("乗務員ID"), "乗務員名": (rs.get("merged_header") or {}).get("乗務員名"), "出庫日時": (rs.get("merged_header") or {}).get("出庫日時") or "", "帰庫日時": (rs.get("merged_header") or {}).get("帰庫日時") or ""}
-                for i, rs in enumerate(run_states)
-            ]
+            driver_rows = [_driver_row_payload(i, rs) for i, rs in enumerate(run_states)]
             manual_data = {"run_states": run_states, "headers": headers, "mergeGroups": merge_groups, "runDateChoices": run_date_choices, "linkPairs": pairs, "alcoholOnlyCrew": alcohol_only, "driverRows": driver_rows}
             if data.get("linkRuns") is not None:
                 manual_data["linkRuns"] = data["linkRuns"]

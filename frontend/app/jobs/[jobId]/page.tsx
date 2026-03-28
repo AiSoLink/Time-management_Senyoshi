@@ -9,6 +9,8 @@ type PendingRow = {
   運行ID: string;
   乗務員ID: string;
   乗務員名: string;
+  /** デジタコから取得した車両番号（`車両番号` と同内容を API で `車番` として渡す） */
+  車番?: string;
   運行日?: string;
   出庫日時: string;
   帰庫日時: string;
@@ -77,12 +79,14 @@ type DriverRow = {
   運行ID: string;
   乗務員ID: string;
   乗務員名: string;
+  車番?: string;
   出庫日時?: string;
   帰庫日時?: string;
 };
 
 type MergeGroupRun = {
   運行ID?: string;
+  車番?: string;
   出庫日時?: string;
   帰庫日時?: string;
   運行日?: string;
@@ -102,6 +106,7 @@ type LinkRun = {
   運行ID: string;
   運行日?: string;
   乗務員名?: string;
+  車番?: string;
   出庫日時?: string;
   帰庫日時?: string;
 };
@@ -153,6 +158,11 @@ function normalizeCrewId(uid: string | undefined): string {
   if (uid == null || String(uid).trim() === "") return "";
   const s = String(uid).trim().replace(/^0+/, "") || "0";
   return s;
+}
+
+function formatPlate(v: string | undefined): string {
+  const s = (v ?? "").trim();
+  return s || "—";
 }
 
 export default function JobPage({ params }: { params: Promise<{ jobId: string }> }) {
@@ -691,7 +701,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                     <tr>
                       <th style={{ minWidth: 90, whiteSpace: "nowrap" }}>乗務員ID</th>
                       <th style={{ minWidth: 100, whiteSpace: "nowrap" }}>乗務員名</th>
-                      <th style={{ minWidth: 320, whiteSpace: "nowrap" }}>運行ID / 出庫日時 / 帰庫日時</th>
+                      <th style={{ minWidth: 360, whiteSpace: "nowrap" }}>運行ID / 出庫・帰庫</th>
                       <th style={{ minWidth: 280, whiteSpace: "nowrap" }}>まとめる運行</th>
                       <th style={{ minWidth: 200, whiteSpace: "nowrap" }}>運行日をどれにしますか？</th>
                     </tr>
@@ -715,7 +725,9 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                                 {runs.map((r, ri) => (
                                   <tr key={ri}>
                                     <td style={{ borderBottom: ri < runs.length - 1 ? "1px solid #ddd" : undefined, whiteSpace: "nowrap" }}>
-                                      <strong>{r.運行ID ?? "—"}</strong><br />
+                                      <strong>{r.運行ID ?? "—"}</strong>
+                                      <span style={{ marginLeft: 8, color: "#444" }}>{formatPlate(r.車番)}</span>
+                                      <br />
                                       出庫: {r.出庫日時 ?? "—"} / 帰庫: {r.帰庫日時 ?? "—"}
                                     </td>
                                   </tr>
@@ -747,7 +759,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                                       });
                                     }}
                                   />
-                                  <span>運行{ri + 1}: {r.運行ID ?? "—"}</span>
+                                  <span>運行{ri + 1}: {r.運行ID ?? "—"}（{formatPlate(r.車番)}）</span>
                                 </label>
                               ))}
                             </div>
@@ -859,7 +871,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             <span key={rid} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                               {ri > 0 && <span style={{ color: "#888" }}>＋</span>}
                               <span style={{ fontSize: 13 }}>
-                                {r ? `${r.運行ID} / ${r.乗務員名 ?? "—"}` : rid}
+                                {r ? `${r.運行ID} / ${r.乗務員名 ?? "—"} 車番:${formatPlate(r.車番)}` : rid}
                               </span>
                               <button type="button" onClick={() => setLinkGroups((prev) => { const n = [...prev]; n[gi] = { ...n[gi], runIds: n[gi].runIds.filter((id) => id !== rid) }; return n; })} style={{ padding: "2px 6px", fontSize: 12 }}>削除</button>
                             </span>
@@ -885,7 +897,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             })
                             .map((r) => (
                             <option key={r.rowIndex} value={r.運行ID}>
-                              {r.運行ID} / {r.乗務員名 ?? "—"} 出庫:{r.出庫日時 ?? "—"} 帰庫:{r.帰庫日時 ?? "—"}
+                              {r.運行ID} / {r.乗務員名 ?? "—"} 車番:{formatPlate(r.車番)} 出庫:{r.出庫日時 ?? "—"} 帰庫:{r.帰庫日時 ?? "—"}
                             </option>
                           ))}
                         </select>
@@ -1026,7 +1038,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                                   <option value="">— 選択 —</option>
                                   {job.driverRows!.map((d) => (
                                     <option key={d.rowIndex} value={d.rowIndex}>
-                                      {d.運行ID ?? "—"} / {d.乗務員名 ?? "—"} 出庫:{d.出庫日時 ?? "—"} 帰庫:{d.帰庫日時 ?? "—"}
+                                      {d.運行ID ?? "—"} / {d.乗務員名 ?? "—"} 車番:{formatPlate(d.車番)} 出庫:{d.出庫日時 ?? "—"} 帰庫:{d.帰庫日時 ?? "—"}
                                     </option>
                                   ))}
                                 </select>
@@ -1100,6 +1112,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                     <th>運行ID</th>
                     <th>乗務員ID</th>
                     <th>乗務員名</th>
+                    <th>車番</th>
                     <th>出庫（日付 / h:mm）</th>
                     <th>帰庫（日付 / h:mm）</th>
                   </tr>
@@ -1112,6 +1125,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                         <td>{r.運行ID}</td>
                         <td>{r.乗務員ID}</td>
                         <td>{r.乗務員名}</td>
+                        <td style={{ whiteSpace: "nowrap" }}>{formatPlate(r.車番)}</td>
                         <td style={{ whiteSpace: "nowrap" }}>
                           <input
                             ref={(el) => { manualInputRefs.current[`${r.rowIndex}-出庫日`] = el; }}

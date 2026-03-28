@@ -142,6 +142,10 @@
       帰庫分: e.帰庫分 !== undefined ? e.帰庫分 : inTime.mm
     };
   }
+  function formatPlate(v) {
+    var s = (v != null ? String(v) : "").trim();
+    return s || "—";
+  }
   function validateTimeBlock(hourValue, minValue) {
     if (hourValue.trim() !== "") {
       var h = parseInt(hourValue, 10);
@@ -440,7 +444,7 @@
   function renderMerge() {
     var gs = job.mergeGroups;
     var html = '<div style="margin-top:16px;margin-bottom:16px"><p style="margin-bottom:8px">あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。<br><br>同じ乗務員で「帰庫」→次の「出庫」が3時間未満の運行があります。まとめる運行を個別に選択してください。</p>';
-    html += '<table class="job-table" style="table-layout:fixed;width:100%;min-width:950px"><thead><tr><th style="width:12%">乗務員ID</th><th style="width:10%">乗務員名</th><th style="width:42%">運行ID / 出庫日時 / 帰庫日時</th><th style="width:16%">まとめる運行</th><th style="width:20%;min-width:200px">運行日をどれにしますか？</th></tr></thead><tbody>';
+    html += '<table class="job-table" style="table-layout:fixed;width:100%;min-width:950px"><thead><tr><th style="width:12%">乗務員ID</th><th style="width:10%">乗務員名</th><th style="width:42%">運行ID / 出庫・帰庫</th><th style="width:16%">まとめる運行</th><th style="width:20%;min-width:200px">運行日をどれにしますか？</th></tr></thead><tbody>';
     for (var gi = 0; gi < gs.length; gi++) {
       var g = gs[gi];
       var dates = g.運行日リスト || [];
@@ -455,7 +459,7 @@
         html += '<table border="0" cellpadding="2" style="border-collapse:collapse;width:100%"><tbody>';
         for (var ri = 0; ri < runs.length; ri++) {
           var r = runs[ri];
-          html += "<tr><td style=\"border-bottom:" + (ri < runs.length - 1 ? "1px solid #ddd" : "none") + ";padding:2px 0\"><strong>" + (r.運行ID || "—") + "</strong><br><span style=\"white-space:nowrap\">出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—") + "</span></td></tr>";
+          html += "<tr><td style=\"border-bottom:" + (ri < runs.length - 1 ? "1px solid #ddd" : "none") + ";padding:2px 0\"><strong>" + (r.運行ID || "—") + "</strong> <span style=\"margin-left:8px;color:#444\">" + formatPlate(r.車番) + "</span><br><span style=\"white-space:nowrap\">出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—") + "</span></td></tr>";
         }
         html += "</tbody></table>";
       } else {
@@ -466,7 +470,7 @@
         for (var ri = 0; ri < runs.length; ri++) {
           var r = runs[ri];
           var checked = selected.indexOf(ri) >= 0 ? " checked" : "";
-          html += '<label class="merge-check" data-gi="' + gi + '" data-ri="' + ri + '"><input type="checkbox" id="merge_cb_' + gi + '_' + ri + '"' + checked + '><span>運行' + (ri + 1) + ': ' + (r.運行ID || "—") + '</span></label>';
+          html += '<label class="merge-check" data-gi="' + gi + '" data-ri="' + ri + '"><input type="checkbox" id="merge_cb_' + gi + '_' + ri + '"' + checked + '><span>運行' + (ri + 1) + ': ' + (r.運行ID || "—") + "（" + formatPlate(r.車番) + "）</span></label>";
         }
       } else {
         html += "—";
@@ -586,7 +590,7 @@
         html += '<div class="link-group-box" data-gi="' + gi + '"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">';
         (grp.runIds || []).forEach(function (rid, ri) {
           var r = job.linkRuns.find(function (x) { return x.運行ID === rid; });
-          html += '<span style="display:inline-flex;align-items:center;gap:4px">' + (ri > 0 ? '<span style="color:#888">＋</span>' : "") + '<span style="font-size:13px">' + (r ? r.運行ID + " / " + (r.乗務員名 || "—") : rid) + '</span><button type="button" class="link-remove-run" data-gi="' + gi + '" data-rid="' + rid + '" style="padding:2px 6px;font-size:12px">削除</button></span>';
+          html += '<span style="display:inline-flex;align-items:center;gap:4px">' + (ri > 0 ? '<span style="color:#888">＋</span>' : "") + '<span style="font-size:13px">' + (r ? r.運行ID + " / " + (r.乗務員名 || "—") + " 車番:" + formatPlate(r.車番) : rid) + '</span><button type="button" class="link-remove-run" data-gi="' + gi + '" data-rid="' + rid + '" style="padding:2px 6px;font-size:12px">削除</button></span>';
         });
         var availableRuns = job.linkRuns.filter(function (r) { return (grp.runIds || []).indexOf(r.運行ID) < 0; }).sort(function (a, b) {
           var na = (a.乗務員名 || "").trim();
@@ -604,7 +608,7 @@
           if (name !== prevName) { prevName = name; driverBg = 1 - driverBg; }
           var rid = (r.運行ID || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
           var nameAttr = (r.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          var label = (r.運行ID || "—") + " / " + (r.乗務員名 || "—") + " 出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—");
+          var label = (r.運行ID || "—") + " / " + (r.乗務員名 || "—") + " 車番:" + formatPlate(r.車番) + " 出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—");
           var labelEsc = label.replace(/</g, "&lt;").replace(/>/g, "&gt;");
           html += '<div class="link-add-opt" data-gi="' + gi + '" data-rid="' + rid + '" data-driver-bg="' + driverBg + '" data-driver-name="' + nameAttr + '"><div class="link-add-opt-row"><input type="checkbox" class="link-add-opt-cb"><span class="link-add-opt-label">' + labelEsc + '</span></div></div>';
         });
@@ -891,7 +895,7 @@
           if (sel !== undefined && sel !== null) {
             var chosen = dr.find(function (d) { return d.rowIndex === sel; });
             if (chosen) {
-              var line1 = (chosen.運行ID || "—") + " / " + (chosen.乗務員名 || "—");
+              var line1 = (chosen.運行ID || "—") + " / " + (chosen.乗務員名 || "—") + " 車番:" + formatPlate(chosen.車番);
               var line2 = "出庫:" + (chosen.出庫日時 || "—") + " 帰庫:" + (chosen.帰庫日時 || "—");
               triggerContent = '<span class="codriver-trigger-line1">' + line1.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span><span class="codriver-trigger-line2">' + line2.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span>';
             }
@@ -912,7 +916,7 @@
           drSorted.forEach(function (d) {
             var name = (d.乗務員名 || "").trim();
             if (name !== optPrevName) { optPrevName = name; optDriverBg = 1 - optDriverBg; }
-            var lab = (d.運行ID || "—") + " / " + (d.乗務員名 || "—") + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
+            var lab = (d.運行ID || "—") + " / " + (d.乗務員名 || "—") + " 車番:" + formatPlate(d.車番) + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
             var nameAttr = (d.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
             html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="' + d.rowIndex + '" data-driver-name="' + nameAttr + '" data-driver-bg="' + optDriverBg + '">' + lab.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
           });
@@ -1084,7 +1088,7 @@
       html += '<span style="font-size:13px;color:#666">（' + displayRows.length + "件表示 / 全" + pendingRows.length + "件）</span>";
     }
     html += "</div>";
-    html += '<table class="job-table manual-tbl" style="max-width:1000px"><thead><tr><th>運行ID</th><th>乗務員ID</th><th>乗務員名</th><th>出庫（日付 / h:mm）</th><th>帰庫（日付 / h:mm）</th></tr></thead><tbody>';
+    html += '<table class="job-table manual-tbl" style="max-width:1000px"><thead><tr><th>運行ID</th><th>乗務員ID</th><th>乗務員名</th><th>車番</th><th>出庫（日付 / h:mm）</th><th>帰庫（日付 / h:mm）</th></tr></thead><tbody>';
     var manualPrevDriver = "";
     var manualDriverBg = 1;
     displayRows.forEach(function (r) {
@@ -1092,7 +1096,7 @@
       if (driverKey !== manualPrevDriver) { manualPrevDriver = driverKey; manualDriverBg = 1 - manualDriverBg; }
       var manualRowBgClass = "manual-row-bg-" + manualDriverBg;
       var m = getManualRow(r);
-      html += "<tr class=\"" + manualRowBgClass + "\"><td>" + (r.運行ID || "—") + "</td><td>" + (r.乗務員ID || "—") + "</td><td>" + (r.乗務員名 || "—") + "</td><td style=\"white-space:nowrap\">";
+      html += "<tr class=\"" + manualRowBgClass + "\"><td>" + (r.運行ID || "—") + "</td><td>" + (r.乗務員ID || "—") + "</td><td>" + (r.乗務員名 || "—") + "</td><td style=\"white-space:nowrap\">" + formatPlate(r.車番) + "</td><td style=\"white-space:nowrap\">";
       html += '<input type="text" class="manual-out-date" data-row="' + r.rowIndex + '" data-field="out-date" value="' + (m.出庫日 || "").replace(/"/g, "&quot;") + '" style="width:100px;margin-right:4px" size="10">';
       html += '<input type="text" inputmode="numeric" class="manual-out-h" data-row="' + r.rowIndex + '" data-field="out-h" value="' + (m.出庫時 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
       html += '<span style="margin:0 2px">:</span>';

@@ -316,6 +316,13 @@ def _load_preset(preset_path: Path) -> Dict[str, Any]:
     return json.loads(preset_path.read_text(encoding="utf-8"))
 
 
+def vehicle_plate_display(車両番号: Any) -> str:
+    """ヘッダー等から取得した車両番号をそのまま返す（数字だけ抽出などはしない）。"""
+    if 車両番号 is None:
+        return ""
+    return str(車両番号).strip()
+
+
 def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any]) -> Dict[str, Any]:
     """
     埋める対象（現時点）:
@@ -457,6 +464,25 @@ def _extract_header_fields(cleaned_text: str, device: str, preset: Dict[str, Any
 # Detail extract (items)
 # =========================
 
+def _sanitize_detail_arrival_depart(task: str, arr: Optional[str], dep: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    正規表現で拾った 1つ目/2つ目の HH:MM を到着・出発に割り当てるが、次を補正する:
+    - 帰庫行は出発時刻が存在しない。2つ目は「時間」列の累計(例: 61:24)が誤マッチすることがあるため出発にしない。
+    - 出発が時計として無効(時>23 または 分>59)なら経過時間等の誤検出として捨てる。
+    """
+    t = str(task or "").strip()
+    if dep is not None and "帰庫" in t:
+        dep = None
+    if dep is not None:
+        try:
+            h, m = map(int, str(dep).split(":"))
+            if h > 23 or m > 59:
+                dep = None
+        except (ValueError, TypeError):
+            dep = None
+    return arr, dep
+
+
 def _extract_detail_rows(raw_text: str) -> List[Dict[str, Any]]:
     """
     明細の1行から最小で取りたいもの:
@@ -466,6 +492,7 @@ def _extract_detail_rows(raw_text: str) -> List[Dict[str, Any]]:
     - 出発 HH:MM（無い場合あり）
 
     mimamoriは左右2カラムが同一行に混ざることがあるので、同一行内で item開始が複数なら分割抽出。
+    帰庫行は出発が無い前提のため、2つ目の HH:MM（経過時間など）は _sanitize_detail_arrival_depart で除外する。
     """
     rows: List[Dict[str, Any]] = []
 
@@ -503,6 +530,7 @@ def _extract_detail_rows(raw_text: str) -> List[Dict[str, Any]]:
             times = re.findall(r"\b\d{2}:\d{2}\b", seg)
             arr = times[0] if len(times) >= 1 else None
             dep = times[1] if len(times) >= 2 else None
+            arr, dep = _sanitize_detail_arrival_depart(task, arr, dep)
             rows.append({"item": item, "task": task, "arrival": arr, "depart": dep, "raw": seg})
 
     seen = set()
@@ -547,6 +575,20 @@ def _build_datetime_sequence(out_dt: datetime, detail_rows: List[Dict[str, Any]]
     return seq
 
 
+def _ctx_for_metrics(rs: Optional[Dict[str, Any]], base: Dict[str, Any]) -> Dict[str, Any]:
+    """_compute_metrics 用に run_state 由来の参照PDF名・report_id を ctx に載せる（ログ・例外文脈用）。"""
+    out = dict(base)
+    if not rs:
+        return out
+    sp = rs.get("source_pdf")
+    if sp is not None and str(sp).strip():
+        out["pdf_filename"] = str(sp).strip()
+    rid = rs.get("report_id")
+    if rid is not None and str(rid).strip():
+        out["report_id"] = str(rid).strip()
+    return out
+
+
 # =========================
 # Metrics compute (ALL INTERNAL = minutes)
 # =========================
@@ -577,7 +619,16 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
         return (1, item, r.get("arrival") or "99:99", r.get("depart") or "99:99")
 
     detail_rows_sorted = sorted(detail_rows, key=_detail_sort_key)
-    seq = _build_datetime_sequence(out_dt, detail_rows_sorted)
+    try:
+        seq = _build_datetime_sequence(out_dt, detail_rows_sorted)
+    except ValueError as e:
+        rid = str(header.get("運行ID") or ctx.get("report_id") or "").strip()
+        pdf = str(ctx.get("pdf_filename") or "").strip()
+        parts = [f"明細の時刻が不正です（{e}）。"]
+        parts.append(f"運行ID={rid or '（不明）'}")
+        if pdf:
+            parts.append(f"参照PDF={pdf}")
+        raise ValueError(" ".join(parts)) from e
 
     # 総走行距離 = 帰庫 - 出庫
     dist = None
@@ -798,8 +849,10 @@ def complete_manual_input(
         e = entries_by_index.get(i)
         if e is not None and e.get("driverRowIndex") is not None:
             driver_idx = int(e["driverRowIndex"])
+            metrics_ctx_rs: Dict[str, Any] = run
             if 0 <= driver_idx < len(run_states):
                 driver_run = run_states[driver_idx]
+                metrics_ctx_rs = driver_run
                 merged_header = dict(driver_run["merged_header"])
                 merged_details = list(driver_run["merged_details"])
                 merged_header["乗務員ID"] = run["merged_header"].get("乗務員ID")
@@ -811,7 +864,10 @@ def complete_manual_input(
                 merged_header["出庫日時"] = (e.get("出庫日時") or "").strip() or None
                 merged_header["帰庫日時"] = (e.get("帰庫日時") or "").strip() or None
                 merged_details = run["merged_details"]
-            ctx = {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""}
+            ctx = _ctx_for_metrics(
+                metrics_ctx_rs,
+                {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""},
+            )
             metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
             row = {**merged_header, **metrics}
             _apply_merged_drive_override(row, merged_header)
@@ -827,7 +883,10 @@ def complete_manual_input(
                     row["出庫日時"] = (e.get("出庫日時") or "").strip() or row.get("出庫日時")
                     row["帰庫日時"] = (e.get("帰庫日時") or "").strip() or row.get("帰庫日時")
             else:
-                ctx = {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""}
+                ctx = _ctx_for_metrics(
+                    run,
+                    {"timestamp": "", "company": "", "device_type": device, "report_id": "", "pdf_filename": "", "level": "", "category": "", "field_name": "", "value_candidates": "", "message": ""},
+                )
                 metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
                 row = {**merged_header, **metrics}
                 _apply_merged_drive_override(row, merged_header)
@@ -877,7 +936,7 @@ def apply_merge_decision(
         if rs.get("merged_row"):
             return dict(rs["merged_row"])
         merged_details = rs.get("merged_details") or []
-        metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
+        metrics = _compute_metrics(merged_header, merged_details, [], _ctx_for_metrics(rs, ctx), preset)
         row = {**merged_header, **metrics}
         if device in ("telecom", "mimamori") and row.get("運行ID"):
             rid = str(row["運行ID"])
@@ -1044,7 +1103,7 @@ def rows_from_run_states(
                     pass
                 return out_row
 
-        metrics = _compute_metrics(merged_header, merged_details, [], ctx, preset)
+        metrics = _compute_metrics(merged_header, merged_details, [], _ctx_for_metrics(rs, ctx), preset)
         row = {**merged_header, **metrics}
 
         # 統合行は _merge_runs 直後の運転時間を使う。再計算すると運行間ギャップを拾って膨張するため上書きしない
@@ -1309,6 +1368,7 @@ def _detect_merge_groups(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             運行リスト = [
                 {
                     "運行ID": rows[idx].get("運行ID"),
+                    "車番": vehicle_plate_display(rows[idx].get("車両番号")),
                     "出庫日時": rows[idx].get("出庫日時") or "",
                     "帰庫日時": rows[idx].get("帰庫日時") or "",
                     "運行日": rows[idx].get("運行日"),
@@ -1685,8 +1745,18 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
             seq_no += 1
             all_details.append(nd)
 
+    merged_pdfs: List[str] = []
+    for rs in run_states:
+        sp = rs.get("source_pdf")
+        if not sp:
+            continue
+        for x in str(sp).split(","):
+            x = x.strip()
+            if x and x not in merged_pdfs:
+                merged_pdfs.append(x)
     merged_run_state = {
         "report_id": first_rs.get("report_id"),
+        "source_pdf": ",".join(merged_pdfs) if merged_pdfs else None,
         "merged_header": merged_header,
         "merged_details": all_details,
         "merged_row": merged_row,
@@ -1862,8 +1932,10 @@ def run_pipeline(
             mh_serialized = {k: _to_serializable(v) for k, v in merged_header.items()}
             mh_serialized["_digitaco_出庫日時"] = mh_serialized.get("出庫日時")
             mh_serialized["_digitaco_帰庫日時"] = mh_serialized.get("帰庫日時")
+            source_pdf = ",".join(dict.fromkeys(p["pdf"] for p in parts))
             run_states.append({
                 "report_id": report_id,
+                "source_pdf": source_pdf,
                 "merged_header": mh_serialized,
                 "merged_details": [{k: _to_serializable(v) for k, v in d.items()} for d in merged_details],
             })
