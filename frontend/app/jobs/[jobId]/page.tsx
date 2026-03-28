@@ -63,6 +63,14 @@ function toDatetime(date: string, h: string, mm: string): string {
   if (!date?.trim() || !h?.trim()) return "";
   return `${date.trim()} ${h.trim()}:${mm2}`;
 }
+/** 手入力の時・分: 全角数字を半角に正規化し、数字のみ最大2文字に */
+function normalizeTimeInput(value: string): string {
+  return (value ?? "").normalize("NFKC").replace(/\D/g, "").slice(0, 2);
+}
+/** 手入力の日付: 全角数字・全角スラッシュを半角に正規化 */
+function normalizeDateInput(value: string): string {
+  return (value ?? "").normalize("NFKC");
+}
 
 type DriverRow = {
   rowIndex: number;
@@ -1109,7 +1117,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             ref={(el) => { manualInputRefs.current[`${r.rowIndex}-出庫日`] = el; }}
                             type="text"
                             value={m.出庫日}
-                            onChange={(e) => updateManualField(r.rowIndex, "出庫日", e.target.value)}
+                            onChange={(e) => updateManualField(r.rowIndex, "出庫日", normalizeDateInput(e.target.value))}
                             onKeyDown={(e) => handleManualKeyDown(r.rowIndex, "出庫日", e)}
                             style={{ width: 100, marginRight: 4 }}
                             size={10}
@@ -1119,7 +1127,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             type="text"
                             inputMode="numeric"
                             value={m.出庫時}
-                            onChange={(e) => updateManualField(r.rowIndex, "出庫時", e.target.value.replace(/\D/g, "").slice(0, 2))}
+                            onChange={(e) => updateManualField(r.rowIndex, "出庫時", normalizeTimeInput(e.target.value))}
                             onKeyDown={(e) => handleManualKeyDown(r.rowIndex, "出庫時", e)}
                             style={{ width: 28, textAlign: "center" }}
                             maxLength={2}
@@ -1130,7 +1138,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             type="text"
                             inputMode="numeric"
                             value={m.出庫分}
-                            onChange={(e) => updateManualField(r.rowIndex, "出庫分", e.target.value.replace(/\D/g, "").slice(0, 2))}
+                            onChange={(e) => updateManualField(r.rowIndex, "出庫分", normalizeTimeInput(e.target.value))}
                             onKeyDown={(e) => handleManualKeyDown(r.rowIndex, "出庫分", e)}
                             style={{ width: 28, textAlign: "center" }}
                             maxLength={2}
@@ -1141,7 +1149,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             ref={(el) => { manualInputRefs.current[`${r.rowIndex}-帰庫日`] = el; }}
                             type="text"
                             value={m.帰庫日}
-                            onChange={(e) => updateManualField(r.rowIndex, "帰庫日", e.target.value)}
+                            onChange={(e) => updateManualField(r.rowIndex, "帰庫日", normalizeDateInput(e.target.value))}
                             onKeyDown={(e) => handleManualKeyDown(r.rowIndex, "帰庫日", e)}
                             style={{ width: 100, marginRight: 4 }}
                             size={10}
@@ -1151,7 +1159,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             type="text"
                             inputMode="numeric"
                             value={m.帰庫時}
-                            onChange={(e) => updateManualField(r.rowIndex, "帰庫時", e.target.value.replace(/\D/g, "").slice(0, 2))}
+                            onChange={(e) => updateManualField(r.rowIndex, "帰庫時", normalizeTimeInput(e.target.value))}
                             onKeyDown={(e) => handleManualKeyDown(r.rowIndex, "帰庫時", e)}
                             style={{ width: 28, textAlign: "center" }}
                             maxLength={2}
@@ -1162,7 +1170,7 @@ export default function JobPage({ params }: { params: Promise<{ jobId: string }>
                             type="text"
                             inputMode="numeric"
                             value={m.帰庫分}
-                            onChange={(e) => updateManualField(r.rowIndex, "帰庫分", e.target.value.replace(/\D/g, "").slice(0, 2))}
+                            onChange={(e) => updateManualField(r.rowIndex, "帰庫分", normalizeTimeInput(e.target.value))}
                             onKeyDown={(e) => handleManualKeyDown(r.rowIndex, "帰庫分", e)}
                             style={{ width: 28, textAlign: "center" }}
                             maxLength={2}

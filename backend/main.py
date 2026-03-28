@@ -7,11 +7,13 @@ import re
 import shutil
 import sys
 import time
+import traceback
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Body
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks, Body, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -394,6 +396,57 @@ app.add_middleware(
 )
 
 ensure_dirs()
+
+
+def _append_server_error_log(text: str) -> None:
+    """未捕捉例外の詳細をファイルに追記（exe では exe 横、開発時は backend/work）。"""
+    try:
+        if getattr(sys, "frozen", False):
+            log_path = Path(sys.executable).resolve().parent / "TimeManagement_api_error.log"
+        else:
+            log_path = APP_ROOT / "work" / "api_error.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(text.rstrip() + "\n")
+    except Exception:
+        pass
+
+
+@app.exception_handler(Exception)
+async def _friendly_unhandled_exception_handler(request: Request, exc: Exception):
+    """HTTPException / RequestValidationError は従来どおり。それ以外は分かりやすい JSON とログを返す。"""
+    if isinstance(exc, HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    if isinstance(exc, RequestValidationError):
+        return JSONResponse(status_code=422, content={"detail": exc.errors()})
+
+    err_id = uuid4().hex[:12]
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    tb = traceback.format_exc()
+    log_block = (
+        f"{ts} errorId={err_id} {request.method} {request.url.path}\n"
+        f"{type(exc).__name__}: {exc}\n{tb}\n"
+    )
+    _append_server_error_log(log_block)
+    try:
+        logging.getLogger("pdf2excel-localweb").error(log_block)
+    except Exception:
+        pass
+
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": (
+                "サーバー側で予期しないエラーが発生しました（処理は中断されました）。"
+                "exe を使っている場合は、exe と同じフォルダの TimeManagement_api_error.log に原因のメモが残ります。"
+            ),
+            "errorId": err_id,
+            "exceptionType": type(exc).__name__,
+            "message": str(exc),
+            "path": str(request.url.path),
+            "method": request.method,
+        },
+    )
 
 @app.get("/api/companies")
 def list_companies():
