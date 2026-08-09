@@ -77,6 +77,12 @@
     <div id="content" style="display:none;"></div>
     <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
   </div>
+
+  <!-- 説明パネル（右サイドバー） -->
+  <div class="guide-panel" id="guidePanel">
+    <h3>操作ガイド</h3>
+    <div id="guideContent"></div>
+  </div>
   <script src="app.js"></script>
   <script>
 (function () {
@@ -86,7 +92,7 @@
   var err = "";
   var mergeSelections = [];
   var runDateChoiceIndex = {};
-  var linkWantAdd = true;
+  var linkWantAdd = null;
   var linkGroups = [];
   var codriverSelections = {};
   var manualEdits = {};
@@ -96,6 +102,31 @@
   var autoDownloadDone = false;  // 「結果を確認する」から遷移したときの1回だけ自動DL
 
   var MANUAL_FIELD_KEYS = ["出庫日", "出庫時", "出庫分", "帰庫日", "帰庫時", "帰庫分"];
+
+  function updateGuide(title, description, steps, alertMsg) {
+    var html = '';
+    if (title) {
+      html += '<div class="guide-step"><div class="guide-step-title">' + title + '</div>';
+      if (description) {
+        var descWithBreaks = description.replace(/\n/g, '<br>');
+        html += '<div class="guide-step-desc">' + descWithBreaks + '</div>';
+      }
+      if (steps && steps.length > 0) {
+        html += '<ul class="guide-checklist">';
+        steps.forEach(function (step) {
+          var stepWithBreaks = step.replace(/\n/g, '<br>');
+          html += '<li>' + stepWithBreaks + '</li>';
+        });
+        html += '</ul>';
+      }
+      if (alertMsg) {
+        var alertWithBreaks = alertMsg.replace(/\n/g, '<br>');
+        html += '<div class="guide-alert">' + alertWithBreaks + '</div>';
+      }
+      html += '</div>';
+    }
+    document.getElementById("guideContent").innerHTML = html;
+  }
 
   function parseDatePart(s) {
     if (!s || !String(s).trim()) return "";
@@ -264,6 +295,12 @@
     err = msg || "";
     var el = document.getElementById("jobErr");
     if (el) el.textContent = err;
+    if (err) {
+      var errHtml = '<div class="guide-step"><div class="guide-error">❌ エラーが発生しました<br><strong>' +
+        err.replace(/</g, "&lt;").replace(/>/g, "&gt;") +
+        '</strong></div><div class="guide-step-desc" style="margin-top:8px;">以下をお試しください：<ul style="padding-left:20px;"><li>別のファイルで再度実行する</li><li>ファイル形式が正しいか確認する</li><li>一度「最初の画面に戻る」から再度実行する</li></ul></div></div>';
+      document.getElementById("guideContent").innerHTML = errHtml;
+    }
   }
 
   function fetchJob() {
@@ -306,7 +343,6 @@
         (j.runDateChoices || []).forEach(function (v, i) { runDateChoiceIndex[i] = v; });
       }
       if (j.status === "link_decision_required") {
-        linkWantAdd = true;
         if ((j.linkGroups || []).length > 0) {
           linkGroups = j.linkGroups.slice();
         } else if ((j.linkPairs || []).length > 0) {
@@ -356,7 +392,12 @@
     setErr(err);
 
     if (job.status === "queued" || job.status === "running") {
-      contentEl.innerHTML = "<p>処理中...</p>";
+      contentEl.innerHTML = "<p>⏳ 処理中...</p>";
+      updateGuide(
+        "処理中",
+        "データを分析しています。\nしばらくお待ちください...",
+        []
+      );
       return;
     }
 
@@ -377,8 +418,17 @@
       return;
     }
     if (job.status === "succeeded") {
-      contentEl.innerHTML = "<p style=\"margin-top:8px\">処理が完了しました。</p>" +
+      contentEl.innerHTML = "<p style=\"margin-top:8px\">✅ 処理が完了しました。</p>" +
         "<p style=\"margin-top:12px\"><button type=\"button\" id=\"btnDownloadExcel\" class=\"btn-primary\">Excelをダウンロード</button></p>";
+      updateGuide(
+        "完了 🎉",
+        "すべての処理が完了しました！",
+        [
+          "「Excelをダウンロード」をクリック",
+          "Excelファイルが自動でダウンロードされます",
+          "ファイルには乗務員の時間データが記載されています"
+        ]
+      );
       var btn = document.getElementById("btnDownloadExcel");
       if (btn) {
         btn.addEventListener("click", function () {
@@ -431,16 +481,31 @@
       return;
     }
     if (job.status === "failed") {
-      contentEl.innerHTML = "<p class=\"err\">ジョブが失敗しました。</p>";
+      contentEl.innerHTML = "<p class=\"err\">❌ ジョブが失敗しました。</p>" +
+        "<p class=\"err\" style=\"margin-top:8px; font-size:12px;\">別のファイルで再度実行してください。問題が解決しない場合は、ファイル形式を確認してください。</p>";
+      updateGuide(
+        "エラー",
+        "ジョブが失敗しました。",
+        [
+          "「最初の画面に戻る」をクリック",
+          "別のファイルで再度実行"
+        ]
+      );
       return;
     }
-    contentEl.innerHTML = "<p>状態: " + (job.status || "—") + "</p>";
+    contentEl.innerHTML = "<p>⚠️ 不明な状態: " + (job.status || "—") + "</p>";
+    updateGuide("状態確認中", "システムが不明な状態です。ページをリロードしてください。", []);
   }
 
   function renderMerge() {
-    var gs = job.mergeGroups;
-    var html = '<div style="margin-top:16px;margin-bottom:16px"><p style="margin-bottom:8px">あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。<br><br>同じ乗務員で「帰庫」→次の「出庫」が3時間未満の運行があります。まとめる運行を個別に選択してください。</p>';
-    html += '<table class="job-table" style="table-layout:fixed;width:100%;min-width:950px"><thead><tr><th style="width:12%">乗務員ID</th><th style="width:10%">乗務員名</th><th style="width:42%">運行ID / 出庫日時 / 帰庫日時</th><th style="width:16%">まとめる運行</th><th style="width:20%;min-width:200px">運行日をどれにしますか？</th></tr></thead><tbody>';
+    var gs = job.mergeGroups || [];
+    if (!gs || gs.length === 0) {
+      updateGuide("エラー", "マージデータが見つかりません。", []);
+      document.getElementById("content").innerHTML = "<p class=\"err\">データが見つかりません。ページをリロードしてください。</p>";
+      return;
+    }
+    var html = '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:16px;margin-bottom:20px;"><p style="color:#666;line-height:1.7;margin:0;font-size:14px;">短い休息の運行をまとめます。<br>帰庫から出庫まで<strong>3時間未満</strong>の場合、<br>1つの運行として扱えます。<br>該当する運行を選んでください。</p></div>';
+    html += '<table class="job-table" style="table-layout:auto;width:100%;"><thead><tr><th>乗務員</th><th>車両情報</th><th>運行詳細</th><th>選択</th><th>実績日</th></tr></thead><tbody>';
     for (var gi = 0; gi < gs.length; gi++) {
       var g = gs[gi];
       var dates = g.運行日リスト || [];
@@ -450,28 +515,35 @@
       var mergedCount = selected.length;
       var choiceIdx = runDateChoiceIndex[gi] != null ? runDateChoiceIndex[gi] : 0;
       var mergedDates = selected.map(function (ri) { return dates[ri]; });
-      html += "<tr><td>" + (g.乗務員ID || "—") + "</td><td>" + (g.乗務員名 || "—") + "</td><td style=\"vertical-align:top\">";
-      if (runs.length > 0) {
-        html += '<table border="0" cellpadding="2" style="border-collapse:collapse;width:100%"><tbody>';
-        for (var ri = 0; ri < runs.length; ri++) {
-          var r = runs[ri];
-          html += "<tr><td style=\"border-bottom:" + (ri < runs.length - 1 ? "1px solid #ddd" : "none") + ";padding:2px 0\"><strong>" + (r.運行ID || "—") + "</strong><br><span style=\"white-space:nowrap\">出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—") + "</span></td></tr>";
-        }
-        html += "</tbody></table>";
-      } else {
-        html += (g.運行IDs || []).join(", ");
-      }
-      html += "</td><td style=\"vertical-align:top\">";
+      html += "<tr><td style=\"font-weight:600;\">" + (g.乗務員名 || "—") + "<br><span style=\"font-size:12px;color:#999;font-weight:400;\">" + (g.乗務員ID || "—") + "</span></td><td style=\"font-size:13px;vertical-align:top;\">";
       if (runs.length > 0) {
         for (var ri = 0; ri < runs.length; ri++) {
           var r = runs[ri];
-          var checked = selected.indexOf(ri) >= 0 ? " checked" : "";
-          html += '<label class="merge-check" data-gi="' + gi + '" data-ri="' + ri + '"><input type="checkbox" id="merge_cb_' + gi + '_' + ri + '"' + checked + '><span>運行' + (ri + 1) + ': ' + (r.運行ID || "—") + '</span></label>';
+          html += (ri > 0 ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e0e0e0;">' : '') + '<div style="font-weight:500;color:#1565c0;">' + (r.車両番号 || r.車両ID || "—") + '</div><div style="color:#666;font-size:12px;">' + (r.所属営業所 || "—") + '</div>' + (ri > 0 ? '</div>' : '');
         }
       } else {
         html += "—";
       }
-      html += "</td><td style=\"min-width:200px\">";
+      html += "</td><td style=\"font-size:13px;vertical-align:top;\">";
+      if (runs.length > 0) {
+        for (var ri = 0; ri < runs.length; ri++) {
+          var r = runs[ri];
+          html += (ri > 0 ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e0e0e0;">' : '') + '<div style="font-weight:500;color:#1565c0;">' + (r.運行ID || "—") + '</div><div style="color:#666;font-size:12px;">' + (r.出庫日時 || "—") + ' - ' + (r.帰庫日時 || "—") + '</div>' + (ri > 0 ? '</div>' : '');
+        }
+      } else {
+        html += (g.運行IDs || []).join(", ");
+      }
+      html += "</td><td style=\"vertical-align:middle;\">";
+      if (runs.length > 0) {
+        for (var ri = 0; ri < runs.length; ri++) {
+          var r = runs[ri];
+          var checked = selected.indexOf(ri) >= 0 ? " checked" : "";
+          html += '<label class="merge-check" data-gi="' + gi + '" data-ri="' + ri + '" style="display:flex;align-items:center;gap:8px;margin:' + (ri > 0 ? '8px' : '0') + ' 0;"><input type="checkbox" id="merge_cb_' + gi + '_' + ri + '"' + checked + ' style="width:16px;height:16px;cursor:pointer;"><span style="font-size:13px;cursor:pointer;">運行 ' + (ri + 1) + '</span></label>';
+        }
+      } else {
+        html += "—";
+      }
+      html += "</td><td>";
       if (mergedCount >= 2 && mergedDates.length >= 2) {
         var seen = {};
         var options = [];
@@ -487,24 +559,35 @@
             break;
           }
         }
-        html += '<select id="run_date_sel_' + gi + '" style="width:130px;max-width:100%">';
+        html += '<select id="run_date_sel_' + gi + '" style="width:140px;padding:8px;border:1px solid #ddd;border-radius:6px;font-size:13px;">';
         options.forEach(function (o) {
           html += '<option value="' + o.value + '"' + (o.value === selectedValue ? " selected" : "") + ">" + o.label + "</option>";
         });
         html += "</select>";
       } else if (mergedCount >= 2 && mergedDates.length === 1) {
-        html += (mergedDates[0] != null ? String(mergedDates[0]) : "—");
+        html += '<span style="color:#666;font-size:13px;font-weight:500;">' + (mergedDates[0] != null ? String(mergedDates[0]) : "—") + '</span>';
       } else {
-        html += '<span style="color:#888">2つ以上選択で表示</span>';
+        html += '<span style="color:#999;font-size:12px;">2つ以上選択</span>';
       }
       html += "</td></tr>";
     }
     html += "</tbody></table>";
-    html += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">';
-    html += '<button type="button" id="btnMergeBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + '>' + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
-    html += '<button type="button" id="btnMergeNext" class="btn-primary" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "処理中..." : "次へ") + "</button>";
-    html += "</div></div>";
+    html += '<div style="display:flex;gap:12px;margin-top:24px;flex-wrap:wrap;">';
+    html += '<button type="button" id="btnMergeBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + ' style="flex:1;min-width:120px;">' + (submitting ? "処理中..." : "戻る") + "</button>";
+    html += '<button type="button" id="btnMergeNext" class="btn-primary" ' + (submitting ? "disabled" : "") + ' style="flex:1;min-width:120px;">' + (submitting ? "処理中..." : "次へ") + "</button>";
+    html += "</div>";
     document.getElementById("content").innerHTML = html;
+
+    updateGuide(
+      "ステップ 1/3：短い休息の運行をまとめる",
+      "帰庫から次の出庫まで\n3時間未満の運行は、\n法律上は一つの運行として扱えます。\n\nそのような運行をまとめるか\n選択してください。",
+      [
+        "2時間以上休息：別の運行",
+        "3時間未満の短い休息：",
+        "　→ 同じ運行として扱える",
+        "2つ以上選択で「次へ」"
+      ]
+    );
 
     document.querySelectorAll(".merge-check input[type=checkbox]").forEach(function (cb) {
       cb.addEventListener("change", function () {
@@ -530,6 +613,17 @@
       window.history.back();
     });
     document.getElementById("btnMergeNext").addEventListener("click", submitMerge);
+
+    updateGuide(
+      "ステップ 3/3：複数運行をまとめる",
+      "同じ乗務員で\n帰庫と出庫が短い運行を\n見つけました。",
+      [
+        "まとめたい運行に\nチェックを入れる",
+        "運行日を選択する\n（複数ある場合）",
+        "次へボタンを押す"
+      ],
+      "チェックがないと\n次へを押せません"
+    );
   }
 
   function submitMerge() {
@@ -575,19 +669,26 @@
 
   function renderLink() {
     var html = '';
-    html += '<div class="link-step-block"><h3 class="link-step-title">説明</h3><div class="link-step-desc">あなたがアップロードしたデジタコデータが「1日に2つ以上ある」ドライバーリストです。<br>同じ乗務員で「帰庫」→次の「出庫」が3時間以上空いている場合、複数運行を1つにまとめて紐づけできます。</div></div>';
-    html += '<div class="link-step-block link-step-choice"><h3 class="link-step-title">紐づけますか？</h3><p>まとめたい運行があれば「はい」、なければ「いいえ」を選んでください。</p><div class="link-step-choice-btns">';
-    html += '<button type="button" id="linkYes" class="btn-secondary" ' + (linkWantAdd ? "style=\"background:#c8e6c9;border:2px solid #2e7d32;font-weight:bold\"" : "") + '>はい（ペアを指定）</button>';
-    html += '<button type="button" id="linkNo" class="btn-secondary" ' + (!linkWantAdd ? "style=\"background:#e0e0e0;border:2px solid #616161;font-weight:bold\"" : "") + '>いいえ（このまま次へ）</button></div></div>';
-    if (linkWantAdd && job.linkRuns && job.linkRuns.length >= 2) {
-      html += '<div class="link-step-block link-step-groups"><h3 class="link-step-title">紐づける運行グループ（2本以上で1つにまとめられます）</h3>';
+    html += '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:16px;margin-bottom:24px;"><p style="margin:0;color:#666;line-height:1.7;font-size:14px;">長く休息した運行をつなぎます。<br>帰庫から出庫まで<strong>3時間以上</strong>空いている場合は<br>通常は別の日の運行ですが、<br>同じ日として扱うことができます。</p></div>';
+    html += '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:20px;margin-bottom:24px;"><h3 style="margin:0 0 12px 0;font-size:16px;font-weight:600;color:#1a1a1a;">運行を紐づけますか？</h3><p style="color:#666;margin:0 0 16px 0;font-size:14px;">複数の運行をまとめる場合は「はい」、そのままにする場合は「いいえ」を選んでください。</p><div style="display:flex;gap:12px;flex-wrap:wrap;">';
+    html += '<button type="button" id="linkYes" class="btn-primary" ' + (linkWantAdd === true ? "style=\"background:linear-gradient(135deg, #2e7d32 0%, #1b5e20 100%);\"" : "style=\"background:#f5f5f5;color:#666;\"") + '>はい</button>';
+    html += '<button type="button" id="linkNo" class="btn-secondary" ' + (linkWantAdd === false ? "style=\"background:#f5f5f5;border:2px solid #1976d2;color:#1976d2;font-weight:600;\"" : "") + '>いいえ</button></div></div>';
+    if (linkWantAdd === true && job.linkRuns && job.linkRuns.length >= 2) {
+      html += '<div style="margin-top:24px;"><h3 style="margin:0 0 12px 0;font-size:16px;font-weight:600;color:#1a1a1a;">運行グループを作成</h3>';
+      html += '<p style="color:#666;font-size:14px;margin:0 0 16px 0;line-height:1.6;">2本以上の運行を同じグループに追加して紐づけします。</p>';
       for (var gi = 0; gi < linkGroups.length; gi++) {
         var grp = linkGroups[gi];
-        html += '<div class="link-group-box" data-gi="' + gi + '"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">';
-        (grp.runIds || []).forEach(function (rid, ri) {
-          var r = job.linkRuns.find(function (x) { return x.運行ID === rid; });
-          html += '<span style="display:inline-flex;align-items:center;gap:4px">' + (ri > 0 ? '<span style="color:#888">＋</span>' : "") + '<span style="font-size:13px">' + (r ? r.運行ID + " / " + (r.乗務員名 || "—") : rid) + '</span><button type="button" class="link-remove-run" data-gi="' + gi + '" data-rid="' + rid + '" style="padding:2px 6px;font-size:12px">削除</button></span>';
-        });
+        var selectedCount = (grp.runIds || []).length;
+        html += '<div class="link-group-box" data-gi="' + gi + '" style="background:#white;border:1px solid #ddd;border-radius:8px;padding:16px;margin-bottom:16px;"><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;"><h4 style="margin:0;font-size:14px;font-weight:600;color:#1a1a1a;">グループ ' + (gi + 1) + '<span style="color:#999;font-weight:400;margin-left:8px;">(' + selectedCount + '本)</span></h4></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:12px;background:#f5f5f5;border-radius:6px;min-height:40px;">';
+        if (selectedCount === 0) {
+          html += '<span style="color:#999;font-size:13px;">選択された運行がありません</span>';
+        } else {
+          (grp.runIds || []).forEach(function (rid, ri) {
+            var r = job.linkRuns.find(function (x) { return x.運行ID === rid; });
+            html += '<span style="display:inline-flex;align-items:center;gap:8px;background:#e3f2fd;padding:8px 12px;border-radius:6px;border:1px solid #90caf9;font-size:13px;">' + (r ? (r.乗務員名 || "—") : rid) + '<button type="button" class="link-remove-run" data-gi="' + gi + '" data-rid="' + rid + '" style="padding:0;width:20px;height:20px;background:#d32f2f;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;">×</button></span>';
+          });
+        }
+        html += '</div>';
         var availableRuns = job.linkRuns.filter(function (r) { return (grp.runIds || []).indexOf(r.運行ID) < 0; }).sort(function (a, b) {
           var na = (a.乗務員名 || "").trim();
           var nb = (b.乗務員名 || "").trim();
@@ -596,18 +697,19 @@
         });
         var driverBg = 1;
         var prevName = "";
-        html += '<div class="link-add-run-wrap"><button type="button" class="link-add-run-trigger" data-gi="' + gi + '">— 運行を追加 —</button><div class="link-add-run-panel" data-gi="' + gi + '">';
-        html += '<div class="link-add-run-search-row"><input type="text" class="link-add-run-search" placeholder="名前で検索" autocomplete="off"><button type="button" class="link-add-run-search-clear" title="検索解除" aria-label="検索解除">×</button><button type="button" class="link-add-run-multi-add" title="チェックした運行をこのグループに追加">選択分を追加</button></div>';
+        html += '<div class="link-add-run-wrap"><button type="button" class="link-add-run-trigger" data-gi="' + gi + '" style="background:#1976d2;color:#fff;font-weight:600;border:none;padding:10px 16px;border-radius:6px;cursor:pointer;font-size:14px;">運行を追加</button><div class="link-add-run-panel" data-gi="' + gi + '">';
+        html += '<div style="padding:12px;border-bottom:1px solid #e0e0e0;"><input type="text" class="link-add-run-search" placeholder="乗務員名で検索" autocomplete="off" style="width:100%;margin-bottom:8px;"><div style="display:flex;gap:8px;"><button type="button" class="link-add-run-search-clear" title="検索解除" aria-label="検索解除" style="flex:1;padding:8px;border:1px solid #ddd;background:#fff;border-radius:6px;font-size:12px;cursor:pointer;">クリア</button><button type="button" class="link-add-run-multi-add" title="チェックした運行をこのグループに追加" style="flex:1;background:#2e7d32;color:#fff;border:none;border-radius:6px;padding:8px;font-size:12px;cursor:pointer;font-weight:600;">追加</button></div></div>';
         html += '<div class="link-add-run-opts">';
+        html += '<div style="max-height:250px;overflow-y:auto;">';
         availableRuns.forEach(function (r) {
           var name = (r.乗務員名 || "").trim();
           if (name !== prevName) { prevName = name; driverBg = 1 - driverBg; }
           var rid = (r.運行ID || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
           var nameAttr = (r.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          var label = (r.運行ID || "—") + " / " + (r.乗務員名 || "—") + " 出庫:" + (r.出庫日時 || "—") + " 帰庫:" + (r.帰庫日時 || "—");
-          var labelEsc = label.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-          html += '<div class="link-add-opt" data-gi="' + gi + '" data-rid="' + rid + '" data-driver-bg="' + driverBg + '" data-driver-name="' + nameAttr + '"><div class="link-add-opt-row"><input type="checkbox" class="link-add-opt-cb"><span class="link-add-opt-label">' + labelEsc + '</span></div></div>';
+          var bgColor = driverBg === 1 ? "#fff" : "#f9f9f9";
+          html += '<div class="link-add-opt" data-gi="' + gi + '" data-rid="' + rid + '" data-driver-bg="' + driverBg + '" data-driver-name="' + nameAttr + '" style="background:' + bgColor + ';padding:12px;border-bottom:1px solid #e0e0e0;cursor:pointer;display:flex;align-items:center;gap:10px;"><input type="checkbox" class="link-add-opt-cb" style="cursor:pointer;width:16px;height:16px;"><div style="flex:1;font-size:13px;"><div style="font-weight:600;color:#1565c0;">' + (r.乗務員名 || "—") + '</div><div style="color:#666;font-size:12px;margin-top:2px;">' + (r.車両番号 || r.車両ID || "—") + '</div><div style="color:#999;font-size:11px;margin-top:2px;">' + (r.出庫日時 || "—") + ' - ' + (r.帰庫日時 || "—") + '</div></div></div>';
         });
+        html += '</div>';
         html += "</div></div></div></div>";
         if ((grp.runIds || []).length >= 2) {
           var runDates = (grp.runIds || []).map(function (rid) {
@@ -626,23 +728,40 @@
               if (runDates[options[oi].value] === curDate) { selVal = options[oi].value; break; }
             }
           }
-          html += '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:13px">運行日を</span><select class="link-date-sel" data-gi="' + gi + '" style="min-width:180px">';
+          html += '<div style="display:flex;align-items:center;gap:10px;margin-top:12px;padding:12px;background:#fffbf0;border:1px solid #ffe0b2;border-radius:6px;"><span style="font-size:13px;font-weight:600;color:#e65100;">実績日：</span><select class="link-date-sel" data-gi="' + gi + '" style="flex:1;padding:8px;border-radius:6px;border:1px solid #ddd;font-size:13px;">';
           options.forEach(function (o) {
             html += '<option value="' + o.value + '"' + (o.value === selVal ? " selected" : "") + ">" + o.label + "</option>";
           });
           html += "</select></div>";
         }
-        html += '<button type="button" class="link-del-group" data-gi="' + gi + '" style="margin-top:6px;padding:2px 8px;font-size:12px">このグループを削除</button></div>';
+        html += '<button type="button" class="link-del-group" data-gi="' + gi + '" style="margin-top:12px;padding:8px 12px;font-size:12px;background:#ffcdd2;color:#d32f2f;border:1px solid #ef5350;border-radius:6px;cursor:pointer;font-weight:500;">削除</button></div>';
       }
-      html += '<div class="link-step-group-actions"><button type="button" id="linkAddGroup" class="btn-secondary" style="padding:6px 12px">グループを追加</button><button type="button" id="linkCancel" class="btn-secondary" style="padding:6px 12px">キャンセル</button></div></div>';
+      html += '<div style="display:flex;gap:12px;margin-top:24px;flex-wrap:wrap;"><button type="button" id="linkAddGroup" class="btn-primary" style="flex:1;min-width:150px;">グループを追加</button><button type="button" id="linkCancel" class="btn-secondary" style="flex:1;min-width:150px;">リセット</button></div></div>';
     }
     if (linkWantAdd && (!job.linkRuns || job.linkRuns.length < 2)) {
       html += '<div class="link-step-block"><p style="color:#666;margin:0">紐づけ可能な運行が2件未満です。「いいえ」を選んで「次へ」で進んでください。</p></div>';
     }
-    html += '<div class="link-step-nav"><button type="button" id="btnLinkBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
-    var canNext = !linkWantAdd || linkGroups.length === 0 || linkGroups.some(function (g) { return (g.runIds || []).length >= 2; });
-    html += '<button type="button" id="btnLinkNext" class="btn-primary" ' + (submitting || (linkWantAdd && !canNext) ? "disabled" : "") + ">" + (submitting ? "処理中..." : "次へ") + "</button></div>";
+    html += '<div class="link-step-nav" style="display:flex;gap:12px;margin-top:24px;flex-wrap:wrap;"><button type="button" id="btnLinkBack" class="btn-secondary" style="flex:1;min-width:120px;" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
+    var canNext = linkWantAdd === false || linkWantAdd === null || linkGroups.length === 0 || linkGroups.some(function (g) { return (g.runIds || []).length >= 2; });
+    html += '<button type="button" id="btnLinkNext" class="btn-primary" style="flex:1;min-width:120px;" ' + (submitting || (linkWantAdd === true && !canNext) ? "disabled" : "") + ">" + (submitting ? "処理中..." : "次へ") + "</button></div>";
     document.getElementById("content").innerHTML = html;
+
+    var guideDesc = "同じ乗務員の複数の運行を\nまとめてひとつにしたい場合は\n「はい」を選んでください。";
+    if (linkWantAdd === false) {
+      guideDesc = "それぞれの運行を別々に\n扱います。";
+    } else if (linkWantAdd === null) {
+      guideDesc = "帰庫から出庫まで\n3時間以上空いている\n同じ乗務員の運行をまとめます。";
+    }
+    updateGuide(
+      "ステップ 2/3：長い休息の運行を紐づける",
+      guideDesc,
+      [
+        "帰庫→出庫が3時間以上：",
+        "　→ 別の日の運行",
+        "まとめたい場合は「はい」",
+        "まとめない場合は「いいえ」"
+      ]
+    );
 
     document.getElementById("linkYes").addEventListener("click", function () {
       linkWantAdd = true;
@@ -778,6 +897,37 @@
       linkGroups = [];
       render();
     });
+
+    if (linkWantAdd === true && job.linkRuns && job.linkRuns.length >= 2) {
+      updateGuide(
+        "ステップ 3/3：運行を紐づける",
+        "2本以上の運行を\n1つのグループに追加して\n紐づけします。",
+        [
+          "運行を追加をクリック",
+          "チェックボックスで\nリストから選択",
+          "追加をクリック",
+          "実績日を確認",
+          "次へを押す"
+        ]
+      );
+    } else if (linkWantAdd === false) {
+      updateGuide(
+        "ステップ 3/3：運行を紐づける",
+        "紐づけをスキップして\n進みます。",
+        [
+          "次へをクリック"
+        ]
+      );
+    } else {
+      updateGuide(
+        "ステップ 3/3：運行を紐づける",
+        "複数の運行を\n1つにまとめるか\n決定します。",
+        [
+          "はいを選ぶ：\n複数運行をまとめる",
+          "いいえを選ぶ：\nこのままにする"
+        ]
+      );
+    }
   }
 
   function doRevertAndRefresh() {
@@ -806,7 +956,7 @@
           (j.runDateChoices || []).forEach(function (v, i) { runDateChoiceIndex[i] = v; });
         }
         if (j.status === "link_decision_required") {
-          linkWantAdd = true;
+          linkWantAdd = null;
           if ((j.linkGroups || []).length > 0) linkGroups = j.linkGroups.slice();
           else if ((j.linkPairs || []).length > 0) {
             linkGroups = j.linkPairs.map(function (p) {
@@ -872,11 +1022,12 @@
   function renderCodriver() {
     var crew = job.alcoholOnlyCrew || [];
     var dr = job.driverRows || [];
-    var html = '<div style="margin-top:16px;margin-bottom:16px;position:relative">';
-    html += '<p style="margin-bottom:12px;font-size:14px;color:#555">以下は「デジタコ」のデータがなく「アルコール」のデータだけある乗務員の一覧です。<br><strong style="font-size:16px">① この中から横乗りした運行のみ、同乗者の運行を選択してください。</strong><br><strong style="font-size:16px">② 「関係ない日」や「横乗りしてない」ものは未選択でOKです。</strong></p>';
+    var html = '<div style="margin-bottom:24px;">';
+    html += '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:16px;margin-bottom:20px;">';
+    html += '<p style="margin:0;color:#666;line-height:1.7;font-size:14px;">この乗務員には<br>アルコール検査の記録がありますが<strong>デジタコのデータがありません</strong>。<br><br>つまり、別の乗務員の車両に同乗するため<br><strong>アルコールは吹いたがデジタコは別の乗務員のIDで運行した</strong><br>可能性があります。</p>';
+    html += '</div>';
     if (crew.length > 0 && dr.length > 0) {
-      html += '<div style="position:absolute;top:-20px;right:-120px;max-width:760px;font-size:14px;background:#fff8e1;border:1px solid #ffb300;padding:12px 20px;border-radius:6px;line-height:1.7;box-shadow:0 3px 8px rgba(0,0,0,0.2)"><div style="font-weight:bold;margin-bottom:4px">コメント</div><div>Q. 添乗してないのに以下のリストになんで出てくるの？</div><div>A. 「日報のファイルがアップロードされてなかったり、デジタコのIDが本人の乗務員IDじゃなく走行した時だよ。」</div></div>';
-      html += '<div style="border:1px solid #ccc;padding:12px;max-width:100%;margin-top:64px"><table class="job-table codriver-tbl" style="width:100%;table-layout:fixed"><colgroup><col><col><col><col><col style="width:40%"></colgroup><thead><tr><th class="border-heavy">乗務員ID</th><th class="border-heavy">乗務員名</th><th class="border-heavy">出庫日時</th><th class="border-heavy">帰庫日時</th><th class="border-heavy codriver-col">誰と添乗しましたか？</th></tr></thead><tbody>';
+      html += '<div style="position:relative;background:white;border:1px solid #ddd;border-radius:8px;overflow:visible;"><div style="overflow-x:visible;"><table class="job-table codriver-tbl" style="width:100%;table-layout:fixed;margin:0;"><thead><tr style="background:#f5f5f5;"><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;width:120px;">乗務員</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;width:150px;">出庫</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;width:150px;">帰庫</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;">同乗していた運行を選択</th></tr></thead><tbody>';
       var codriverPrevDriver = "";
       var codriverDriverBg = 1;
       crew.forEach(function (c) {
@@ -891,14 +1042,14 @@
           if (sel !== undefined && sel !== null) {
             var chosen = dr.find(function (d) { return d.rowIndex === sel; });
             if (chosen) {
-              var line1 = (chosen.運行ID || "—") + " / " + (chosen.乗務員名 || "—");
+              var line1 = (chosen.乗務員名 || "—") + " / " + (chosen.車両番号 || chosen.車両ID || "—");
               var line2 = "出庫:" + (chosen.出庫日時 || "—") + " 帰庫:" + (chosen.帰庫日時 || "—");
               triggerContent = '<span class="codriver-trigger-line1">' + line1.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span><span class="codriver-trigger-line2">' + line2.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span>';
             }
           } else {
             triggerContent = triggerContent.replace(/</g, "&lt;").replace(/>/g, "&gt;");
           }
-          html += "<tr class=\"" + rowBgClass + "\"><td style=\"white-space:nowrap\">" + (c.乗務員ID || "—") + "</td><td style=\"white-space:nowrap\">" + (c.乗務員名 || "—") + "</td><td style=\"white-space:nowrap\">" + (run.出庫日時 || "—") + "</td><td style=\"white-space:nowrap\">" + (run.帰庫日時 || "—") + "</td><td class=\"codriver-col\"><div class=\"codriver-cell\"><div class=\"codriver-wrap\" data-key=\"" + keyEsc + "\"><button type=\"button\" class=\"codriver-trigger\" data-key=\"" + keyEsc + "\">" + triggerContent + "</button><div class=\"codriver-panel\" data-key=\"" + keyEsc + "\">";
+          html += "<tr class=\"" + rowBgClass + "\" style=\"background:" + (codriverDriverBg === 1 ? "#fff" : "#f9f9f9") + ";\"><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;font-size:13px;font-weight:500;width:120px;overflow:hidden;text-overflow:ellipsis;\">" + (c.乗務員名 || "—") + "<br><span style=\"font-size:11px;color:#999;\">" + (c.乗務員ID || "—") + "</span></td><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;font-size:13px;width:150px;\">" + (run.出庫日時 || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;font-size:13px;width:150px;\">" + (run.帰庫日時 || "—") + "</td><td class=\"codriver-col\" style=\"padding:12px;border:1px solid #ddd;\"><div class=\"codriver-cell\"><div class=\"codriver-wrap\" data-key=\"" + keyEsc + "\"><button type=\"button\" class=\"codriver-trigger\" data-key=\"" + keyEsc + "\" style=\"width:100%;text-align:left;padding:8px 10px;border:1px solid #ddd;background:#fff;border-radius:6px;cursor:pointer;font-size:13px;\">" + triggerContent + "</button><div class=\"codriver-panel\" data-key=\"" + keyEsc + "\" style=\"left:0;right:auto;min-width:280px;z-index:1002;\">";
           html += '<div class="codriver-search-row"><input type="text" class="codriver-search" placeholder="名前で検索" autocomplete="off"><button type="button" class="codriver-search-clear" title="検索解除" aria-label="検索解除">×</button></div><div class="codriver-opts">';
           html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="">— 選択 —</div>';
           var drSorted = dr.slice().sort(function (a, b) {
@@ -912,7 +1063,7 @@
           drSorted.forEach(function (d) {
             var name = (d.乗務員名 || "").trim();
             if (name !== optPrevName) { optPrevName = name; optDriverBg = 1 - optDriverBg; }
-            var lab = (d.運行ID || "—") + " / " + (d.乗務員名 || "—") + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
+            var lab = (d.乗務員名 || "—") + " / " + (d.車両番号 || d.車両ID || "—") + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
             var nameAttr = (d.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
             html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="' + d.rowIndex + '" data-driver-name="' + nameAttr + '" data-driver-bg="' + optDriverBg + '">' + lab.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
           });
@@ -923,9 +1074,9 @@
           html += "</div></td></tr>";
         });
       });
-      html += "</tbody></table>";
+      html += "</tbody></table></div></div>";
       var dis = submitting ? " disabled" : "";
-      html += "<div style=\"display:flex;gap:8px;margin-top:12px;flex-wrap:wrap\"><button type=\"button\" id=\"btnCodriverBack\" class=\"btn-secondary\"" + dis + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button><button type=\"button\" id=\"btnCodriverNext\" class=\"btn-primary\"" + dis + ">" + (submitting ? "処理中..." : "次へ") + "</button></div></div>";
+      html += "<div style=\"display:flex;gap:12px;margin-top:24px;flex-wrap:wrap\"><button type=\"button\" id=\"btnCodriverBack\" class=\"btn-secondary\" style=\"flex:1;min-width:120px;\"" + dis + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button><button type=\"button\" id=\"btnCodriverNext\" class=\"btn-primary\" style=\"flex:1;min-width:120px;\"" + dis + ">" + (submitting ? "処理中..." : "次へ") + "</button></div></div>";
     } else {
       html += '<p style="color:#666;margin-bottom:8px">同乗者またはデジタコ運行データがありません。</p>';
       var dis2 = submitting ? " disabled" : "";
@@ -933,6 +1084,16 @@
     }
     html += "</div>";
     document.getElementById("content").innerHTML = html;
+
+    updateGuide(
+      "ステップ 3/3：同乗運行を指定",
+      "この乗務員には\nアルコール検査の記録がありますが\nデジタコのデータがありません。\n\n別の乗務員の車両に同乗していた\n可能性があります。\n\n該当する運行があれば\n選択してください。",
+      [
+        "別の乗務員の運行に同乗した",
+        "場合に該当します",
+        "同乗運行を選択したら「次へ」"
+      ]
+    );
 
     document.querySelectorAll(".codriver-trigger").forEach(function (btn) {
       btn.addEventListener("click", function (e) {
@@ -1008,6 +1169,7 @@
     if (nextBtn) nextBtn.addEventListener("click", submitCodriverLink);
     var skipBtn = document.getElementById("btnCodriverSkip");
     if (skipBtn) skipBtn.addEventListener("click", submitCodriverSkip);
+
   }
 
   function submitCodriverSkip() {
@@ -1072,19 +1234,18 @@
     uniqueDateKeys.sort();
     var displayRows = manualDateFilter === "" ? pendingRows : pendingRows.filter(function (r) { return normalizeDateKey(getManualRow(r).出庫日) === manualDateFilter; });
 
-    var html = '<div style="margin-top:16px;margin-bottom:16px;position:relative">';
-    html += '<div style="position:absolute;top:-100px;right:-5px;max-width:400px;font-size:14px;background:#fff8e1;border:1px solid #ffb300;padding:12px 20px;border-radius:6px;line-height:1.6;box-shadow:0 3px 8px rgba(0,0,0,0.2)"><div style="font-weight:bold;margin-bottom:4px">コメント</div><div>必要ない運行日は未入力でOK</div></div>';
-    html += '<p style="margin-bottom:8px">「アルコール検知器」を<strong>吹いてないか</strong>、吹いた時間が「デジタコ」の出庫/帰庫時間と<strong>離れすぎてるか</strong>で「紐づかなかった」乗務員の一覧です。<br>出庫・帰庫の日時を手入力してください。</p>';
-    html += '<div style="margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:14px;font-weight:500">出庫日で絞り込み:</span><select id="manualDateFilter" style="padding:4px 8px;font-size:14px;min-width:140px"><option value="">すべて表示</option>';
+    var html = '<div style="margin-bottom:24px;">';
+    html += '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:16px;margin-bottom:20px;"><p style="margin:0;color:#666;line-height:1.7;font-size:14px;">システムにデータが見つからない乗務員です。<br>アルコール検査の記録がある場合、<br>実際の出庫・帰庫時間を入力してください。<br>該当がなければ空のままでOK。</p></div>';
+    html += '<div style="margin-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap"><span style="font-size:14px;font-weight:500;color:#1a1a1a;">絞り込み:</span><select id="manualDateFilter" style="padding:8px 12px;font-size:13px;border:1px solid #ddd;border-radius:6px;min-width:140px;"><option value="">すべて表示</option>';
     uniqueDateKeys.forEach(function (key) {
       html += '<option value="' + key.replace(/"/g, "&quot;") + '"' + (manualDateFilter === key ? " selected" : "") + ">" + formatDateLabel(key) + "</option>";
     });
     html += "</select>";
     if (manualDateFilter !== "") {
-      html += '<span style="font-size:13px;color:#666">（' + displayRows.length + "件表示 / 全" + pendingRows.length + "件）</span>";
+      html += '<span style="font-size:13px;color:#999;">（' + displayRows.length + "件表示 / 全" + pendingRows.length + "件）</span>";
     }
     html += "</div>";
-    html += '<table class="job-table manual-tbl" style="max-width:1000px"><thead><tr><th>運行ID</th><th>乗務員ID</th><th>乗務員名</th><th>出庫（日付 / h:mm）</th><th>帰庫（日付 / h:mm）</th></tr></thead><tbody>';
+    html += '<div style="overflow-x:auto;background:white;border:1px solid #ddd;border-radius:8px;"><table class="job-table manual-tbl" style="width:100%;table-layout:auto;margin:0;border-collapse:collapse;"><thead><tr style="background:#f5f5f5;"><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;">乗務員</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;">運行ID</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;">車両</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;">出庫（日付 / h:mm）</th><th style="border:1px solid #ddd;padding:12px;font-weight:600;text-align:left;font-size:13px;color:#1a1a1a;">帰庫（日付 / h:mm）</th></tr></thead><tbody>';
     var manualPrevDriver = "";
     var manualDriverBg = 1;
     displayRows.forEach(function (r) {
@@ -1092,21 +1253,21 @@
       if (driverKey !== manualPrevDriver) { manualPrevDriver = driverKey; manualDriverBg = 1 - manualDriverBg; }
       var manualRowBgClass = "manual-row-bg-" + manualDriverBg;
       var m = getManualRow(r);
-      html += "<tr class=\"" + manualRowBgClass + "\"><td>" + (r.運行ID || "—") + "</td><td>" + (r.乗務員ID || "—") + "</td><td>" + (r.乗務員名 || "—") + "</td><td style=\"white-space:nowrap\">";
-      html += '<input type="text" class="manual-out-date" data-row="' + r.rowIndex + '" data-field="out-date" value="' + (m.出庫日 || "").replace(/"/g, "&quot;") + '" style="width:100px;margin-right:4px" size="10">';
-      html += '<input type="text" inputmode="numeric" class="manual-out-h" data-row="' + r.rowIndex + '" data-field="out-h" value="' + (m.出庫時 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
-      html += '<span style="margin:0 2px">:</span>';
-      html += '<input type="text" inputmode="numeric" class="manual-out-m" data-row="' + r.rowIndex + '" data-field="out-m" value="' + (m.出庫分 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
-      html += "</td><td style=\"white-space:nowrap\">";
-      html += '<input type="text" class="manual-in-date" data-row="' + r.rowIndex + '" data-field="in-date" value="' + (m.帰庫日 || "").replace(/"/g, "&quot;") + '" style="width:100px;margin-right:4px" size="10">';
-      html += '<input type="text" inputmode="numeric" class="manual-in-h" data-row="' + r.rowIndex + '" data-field="in-h" value="' + (m.帰庫時 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
-      html += '<span style="margin:0 2px">:</span>';
-      html += '<input type="text" inputmode="numeric" class="manual-in-m" data-row="' + r.rowIndex + '" data-field="in-m" value="' + (m.帰庫分 || "").replace(/"/g, "&quot;") + '" style="min-width:40px;width:40px;text-align:center" maxlength="2">';
+      html += "<tr class=\"" + manualRowBgClass + "\" style=\"background:" + (manualDriverBg === 1 ? "#fff" : "#f9f9f9") + ";\"><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;font-weight:500;white-space:nowrap;\">" + (r.乗務員名 || "—") + "<br><span style=\"font-size:11px;color:#999;\">" + (r.乗務員ID || "—") + "</span></td><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;white-space:nowrap;\">" + (r.運行ID || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;white-space:nowrap;\">" + (r.車両番号 || r.車両ID || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;\">";
+      html += '<input type="text" class="manual-out-date" data-row="' + r.rowIndex + '" data-field="out-date" value="' + (m.出庫日 || "").replace(/"/g, "&quot;") + '" style="width:80px;margin-right:4px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;" size="10">';
+      html += '<input type="text" inputmode="numeric" class="manual-out-h" data-row="' + r.rowIndex + '" data-field="out-h" value="' + (m.出庫時 || "").replace(/"/g, "&quot;") + '" style="width:32px;padding:6px 4px;border:1px solid #ddd;border-radius:4px;text-align:center;font-size:12px;" maxlength="2">';
+      html += '<span style="margin:0 2px;font-size:12px;">:</span>';
+      html += '<input type="text" inputmode="numeric" class="manual-out-m" data-row="' + r.rowIndex + '" data-field="out-m" value="' + (m.出庫分 || "").replace(/"/g, "&quot;") + '" style="width:32px;padding:6px 4px;border:1px solid #ddd;border-radius:4px;text-align:center;font-size:12px;" maxlength="2">';
+      html += "</td><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;\">";
+      html += '<input type="text" class="manual-in-date" data-row="' + r.rowIndex + '" data-field="in-date" value="' + (m.帰庫日 || "").replace(/"/g, "&quot;") + '" style="width:80px;margin-right:4px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;" size="10">';
+      html += '<input type="text" inputmode="numeric" class="manual-in-h" data-row="' + r.rowIndex + '" data-field="in-h" value="' + (m.帰庫時 || "").replace(/"/g, "&quot;") + '" style="width:32px;padding:6px 4px;border:1px solid #ddd;border-radius:4px;text-align:center;font-size:12px;" maxlength="2">';
+      html += '<span style="margin:0 2px;font-size:12px;">:</span>';
+      html += '<input type="text" inputmode="numeric" class="manual-in-m" data-row="' + r.rowIndex + '" data-field="in-m" value="' + (m.帰庫分 || "").replace(/"/g, "&quot;") + '" style="width:32px;padding:6px 4px;border:1px solid #ddd;border-radius:4px;text-align:center;font-size:12px;" maxlength="2">';
       html += "</td></tr>";
     });
-    html += "</tbody></table>";
-    html += '<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button type="button" id="btnManualBack" class="btn-secondary" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
-    html += '<button type="button" id="btnManualDl" class="btn-primary" ' + (submitting ? "disabled" : "") + ' title="押すとExcelを出力し、ダウンロードできます">' + (submitting ? "ダウンロード中..." : "ダウンロード") + "</button></div></div>";
+    html += "</tbody></table></div>";
+    html += '<div style="display:flex;gap:12px;margin-top:24px;flex-wrap:wrap;"><button type="button" id="btnManualBack" class="btn-secondary" style="flex:1;min-width:120px;" ' + (submitting ? "disabled" : "") + ">" + (submitting ? "戻っています..." : "1つ前の画面に戻る") + "</button>";
+    html += '<button type="button" id="btnManualDl" class="btn-primary" style="flex:1;min-width:120px;" ' + (submitting ? "disabled" : "") + ' title="Excelファイルをダウンロード">' + (submitting ? "ダウンロード中..." : "ダウンロード") + "</button></div></div>";
     document.getElementById("content").innerHTML = html;
 
     document.getElementById("manualDateFilter").addEventListener("change", function () {
@@ -1208,6 +1369,18 @@
     if (firstOutH) {
       setTimeout(function () { firstOutH.focus(); firstOutH.select && firstOutH.select(); }, 0);
     }
+
+    updateGuide(
+      "ステップ 4/4：時間を入力",
+      "以下の乗務員のデータが\nシステムに見つかりませんでした。\n\n該当する日付の出庫・帰庫時間を\n手入力してください。\n\n関係ない行は空のままでOK。",
+      [
+        "日付：YYYY/MM/DD 形式",
+        "時刻：HH:MM 形式",
+        "例）2024/12/15、09:30",
+        "Enterで次の欄に移動",
+        "完了したら「ダウンロード」"
+      ]
+    );
   }
 
   function triggerDownload(blob, filename) {

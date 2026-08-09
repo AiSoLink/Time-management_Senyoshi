@@ -8,18 +8,22 @@
 <body>
   <div class="container">
     <h1>時間管理システム</h1>
-    <h2>2) 機種</h2>
-    <p>会社：<b id="companyName">—</b></p>
+    <h2>1) 機種を選択</h2>
     <p id="err" class="err" style="display:none;"></p>
-    <div id="devices" style="display:flex; gap:10px;"></div>
-    <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
+    <p style="color:#666;margin-bottom:20px;line-height:1.6;">使用しているデジタコの機種を選択してください。</p>
+    <div id="devices" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:16px;"></div>
   </div>
+
+  <!-- 説明パネル（右サイドバー） -->
+  <div class="guide-panel" id="guidePanel">
+    <h3>操作ガイド</h3>
+    <div id="guideContent"></div>
+  </div>
+
   <script src="app.js"></script>
   <script>
     var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
-    var params = new URLSearchParams(location.search);
-    var company = params.get("company") || "";
-    document.getElementById("companyName").textContent = company || "—";
+    var DEFAULT_COMPANY = "サンプルA";
 
     var errEl = document.getElementById("err");
     var devicesEl = document.getElementById("devices");
@@ -29,32 +33,71 @@
       errEl.style.display = msg ? "block" : "none";
     }
 
-    if (!company) {
-      showErr("会社が指定されていません");
-    } else {
-      apiGet("/api/companies/" + encodeURIComponent(company) + "/devices")
-        .then(function (data) {
-          devicesEl.innerHTML = "";
-          (data.devices || []).forEach(function (d) {
-            var a = document.createElement("a");
-            a.textContent = DEVICE_DISPLAY[d.name] || d.name;
-            a.style.padding = "10px 12px";
-            a.style.border = "1px solid #444";
-            a.style.borderRadius = "8px";
-            a.style.textDecoration = "none";
-            a.style.color = "inherit";
-            a.style.opacity = d.preset ? "1" : "0.5";
-            a.style.pointerEvents = d.preset ? "auto" : "none";
-            if (d.preset) {
-              a.href = "run.html?company=" + encodeURIComponent(company) + "&device=" + encodeURIComponent(d.name);
-            } else {
-              a.href = "#";
-            }
-            devicesEl.appendChild(a);
+    function updateGuide(title, description, steps) {
+      var html = '';
+      if (title) {
+        html += '<div class="guide-step"><div class="guide-step-title">' + title + '</div>';
+        if (description) {
+          var descWithBreaks = description.replace(/\n/g, '<br>');
+          html += '<div class="guide-step-desc">' + descWithBreaks + '</div>';
+        }
+        if (steps && steps.length > 0) {
+          html += '<ul class="guide-checklist">';
+          steps.forEach(function (step) {
+            var stepWithBreaks = step.replace(/\n/g, '<br>');
+            html += '<li>' + stepWithBreaks + '</li>';
           });
-        })
-        .catch(function (e) { showErr(String(e)); });
+          html += '</ul>';
+        }
+        html += '</div>';
+      }
+      document.getElementById("guideContent").innerHTML = html;
     }
+
+    updateGuide(
+      "ステップ 1/3：機種を選択",
+      "使用するデジタコの\n機種をクリック",
+      [
+        "みまもり、またはテレコムを選択",
+        "グレー表示は使用不可",
+        "完了したら次の画面へ"
+      ]
+    );
+
+    apiGet("/api/companies/" + encodeURIComponent(DEFAULT_COMPANY) + "/devices")
+      .then(function (data) {
+        devicesEl.innerHTML = "";
+        (data.devices || []).forEach(function (d) {
+          var a = document.createElement("a");
+          a.textContent = DEVICE_DISPLAY[d.name] || d.name;
+          a.style.display = "block";
+          a.style.padding = "20px";
+          a.style.border = "1px solid " + (d.preset ? "#1976d2" : "#ddd");
+          a.style.background = d.preset ? "#f5f9ff" : "#f5f5f5";
+          a.style.borderRadius = "8px";
+          a.style.textDecoration = "none";
+          a.style.color = d.preset ? "#1565c0" : "#999";
+          a.style.fontWeight = d.preset ? "600" : "400";
+          a.style.fontSize = "16px";
+          a.style.textAlign = "center";
+          a.style.cursor = d.preset ? "pointer" : "default";
+          a.style.transition = "all 0.2s ease";
+          a.style.opacity = "1";
+          a.style.pointerEvents = d.preset ? "auto" : "none";
+          if (d.preset) {
+            a.href = "run.html?company=" + encodeURIComponent(DEFAULT_COMPANY) + "&device=" + encodeURIComponent(d.name);
+          } else {
+            a.href = "#";
+            a.title = "この機種は利用できません";
+          }
+          devicesEl.appendChild(a);
+        });
+      })
+      .catch(function (e) {
+        var errMsg = String(e);
+        showErr(errMsg);
+        updateGuide("エラー", errMsg, []);
+      });
   </script>
 </body>
 </html>

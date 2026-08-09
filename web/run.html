@@ -8,51 +8,58 @@
 <body>
   <div class="container">
     <h1>時間管理システム</h1>
-    <h2>3) 実行</h2>
-    <p>会社：<b id="companyLabel"></b> / 機種：<b id="deviceLabel"></b></p>
+    <h2>2) ファイルをアップロード</h2>
+    <p>機種：<b id="deviceLabel"></b></p>
     <p id="err" class="err" style="display:none;"></p>
 
     <div id="uploadSection">
-      <div style="display:flex; flex-wrap:wrap; gap:24px; margin-bottom:16px;">
-        <div style="min-width:160px;">
-          <div style="font-weight:600; margin-bottom:4px;" id="digitacoLabel">みまもり / テレコム（デジタコ）</div>
-          <input type="file" accept="application/pdf" multiple id="pdfs" />
-          <span id="pdfCount" style="margin-left:8px; font-size:14px;"></span>
+      <div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:24px;margin-bottom:24px;">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:20px;margin-bottom:24px;">
+          <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;" id="digitacoLabel">デジタコ（必須）</div>
+            <input type="file" accept="application/pdf" multiple id="pdfs" style="width:100%;"/>
+            <span id="pdfCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
+          </div>
+          <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">対面アルコール</div>
+            <input type="file" multiple id="taimen" style="width:100%;"/>
+            <span id="taimenCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
+          </div>
+          <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">アルキラー（遠隔）</div>
+            <input type="file" multiple id="alcohol" style="width:100%;"/>
+            <span id="alcoholCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
+          </div>
         </div>
-        <div style="min-width:160px;">
-          <div style="font-weight:600; margin-bottom:4px;">対面</div>
-          <input type="file" multiple id="taimen" />
-          <span id="taimenCount" style="margin-left:8px; font-size:14px;"></span>
-        </div>
-        <div style="min-width:160px;">
-          <div style="font-weight:600; margin-bottom:4px;">アルキラーNEX</div>
-          <input type="file" multiple id="alcohol" />
-          <span id="alcoholCount" style="margin-left:8px; font-size:14px;"></span>
-        </div>
-      </div>
-      <div class="section-actions">
-        <button type="button" id="btnStart" class="btn-primary">実行</button>
+        <button type="button" id="btnStart" class="btn-primary" style="width:100%;padding:12px;font-size:16px;">実行</button>
       </div>
     </div>
 
-    <div id="progressSection" style="display:none; margin-top:16px; max-width:480px;">
-      <p id="progressText" style="margin-bottom:8px; font-weight:600;">処理中…</p>
+    <div id="progressSection" style="display:none; background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:24px;">
+      <p id="progressText" style="margin:0 0 16px 0; font-weight:600;color:#1a1a1a;">処理中…</p>
       <div class="progress-bar">
         <div class="progress-bar-inner" id="progressBar" style="width:0%;"></div>
       </div>
-      <p id="progressDetail" style="margin-top:6px; font-size:14px; color:#555;"></p>
+      <p id="progressDetail" style="margin-top:12px; font-size:13px; color:#666;"></p>
     </div>
 
-    <div id="doneSection" style="display:none; padding:12px 0;">
-      <p style="margin-bottom:12px; font-weight:600;">処理が完了しました。</p>
-      <div class="section-actions">
-        <button type="button" id="btnToResult" class="btn-primary">結果を確認する →</button>
-        <button type="button" id="btnAgain" class="btn-secondary">別のファイルで再実行</button>
+    <div id="doneSection" style="display:none; background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:24px;">
+      <h3 style="margin:0 0 16px 0;color:#15803d;font-size:16px;">処理が完了しました</h3>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <button type="button" id="btnToResult" class="btn-primary" style="flex:1;min-width:150px;">結果を確認</button>
+        <button type="button" id="btnAgain" class="btn-secondary" style="flex:1;min-width:150px;">別のファイルで再実行</button>
       </div>
     </div>
 
     <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
   </div>
+
+  <!-- 説明パネル（右サイドバー） -->
+  <div class="guide-panel" id="guidePanel">
+    <h3>操作ガイド</h3>
+    <div id="guideContent"></div>
+  </div>
+
   <script src="app.js"></script>
   <script>
     var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
@@ -61,7 +68,6 @@
     var device = params.get("device") || "";
     var deviceLabel = device ? (DEVICE_DISPLAY[device] || device) : "";
 
-    document.getElementById("companyLabel").textContent = company;
     document.getElementById("deviceLabel").textContent = deviceLabel || "—";
     document.getElementById("digitacoLabel").textContent = deviceLabel || "みまもり / テレコム（デジタコ）";
 
@@ -81,6 +87,27 @@
       errEl.style.display = msg ? "block" : "none";
     }
 
+    function updateGuide(title, description, steps) {
+      var html = '';
+      if (title) {
+        html += '<div class="guide-step"><div class="guide-step-title">' + title + '</div>';
+        if (description) {
+          var descWithBreaks = description.replace(/\n/g, '<br>');
+          html += '<div class="guide-step-desc">' + descWithBreaks + '</div>';
+        }
+        if (steps && steps.length > 0) {
+          html += '<ul class="guide-checklist">';
+          steps.forEach(function (step) {
+            var stepWithBreaks = step.replace(/\n/g, '<br>');
+            html += '<li>' + stepWithBreaks + '</li>';
+          });
+          html += '</ul>';
+        }
+        html += '</div>';
+      }
+      document.getElementById("guideContent").innerHTML = html;
+    }
+
     function updateCounts() {
       document.getElementById("pdfCount").textContent = pdfInput.files.length ? pdfInput.files.length + "件" : "";
       document.getElementById("taimenCount").textContent = taimenInput.files.length ? taimenInput.files.length + "件" : "";
@@ -91,6 +118,18 @@
     taimenInput.addEventListener("change", updateCounts);
     alcoholInput.addEventListener("change", updateCounts);
     updateCounts();
+
+    updateGuide(
+      "ステップ 2/3：ファイルを選択",
+      "必要なファイルを\n選択してください。",
+      [
+        "デジタコ：必須",
+        "対面アルコール：選択可",
+        "アルキラー（遠隔）：選択可",
+        "複数ファイル選択可能",
+        "実行ボタンをクリック"
+      ]
+    );
 
     document.getElementById("btnStart").addEventListener("click", function () {
       if (pdfInput.files.length === 0) return;
@@ -103,6 +142,11 @@
       for (var i = 0; i < alcoholInput.files.length; i++) fd.append("alcohol", alcoholInput.files[i]);
       document.getElementById("btnStart").disabled = true;
       document.getElementById("btnStart").textContent = "送信中...";
+      updateGuide(
+        "ステップ 2/3：アップロード中",
+        "ファイルを\nサーバーに送信中です。\n\nしばらくお待ちください。",
+        []
+      );
       fetch(API_BASE + "/api/jobs", { method: "POST", body: fd })
         .then(function (res) {
           if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
@@ -117,7 +161,16 @@
           poll();
         })
         .catch(function (e) {
-          showErr(String(e));
+          var errMsg = String(e);
+          showErr(errMsg);
+          updateGuide(
+            "エラー",
+            errMsg,
+            [
+              "ファイル形式を確認してください",
+              "別のファイルで再度試してください"
+            ]
+          );
           document.getElementById("btnStart").disabled = false;
           document.getElementById("btnStart").textContent = "実行";
         });
@@ -129,14 +182,30 @@
         var pct = j.totalPdfs ? Math.round((100 * j.processedPdfs) / j.totalPdfs) : 0;
         document.getElementById("progressBar").style.width = pct + "%";
         document.getElementById("progressDetail").textContent = j.processedPdfs + " / " + j.totalPdfs + " PDF 処理済み";
+        updateGuide(
+          "ステップ 2/3：処理中... (" + pct + "%)",
+          "PDFファイルを分析しています。\n電源を切らずにお待ちください。",
+          [
+            "処理中：" + j.processedPdfs + " / " + j.totalPdfs + " ファイル"
+          ]
+        );
         if (j.status === "queued" || j.status === "running") {
           pollTimer = setTimeout(poll, 1000);
         } else {
           lastJobStatus = j.status;
           progressSection.style.display = "none";
           doneSection.style.display = "block";
+          updateGuide(
+            "ステップ 2/3：完了 ✅",
+            "ファイルの分析が完了しました。\n「結果を確認する」をクリックしてください。",
+            []
+          );
         }
-      }).catch(function (e) { showErr(String(e)); });
+      }).catch(function (e) {
+        var errMsg = String(e);
+        showErr(errMsg);
+        updateGuide("エラー", errMsg, []);
+      });
     }
 
     document.getElementById("btnToResult").addEventListener("click", function () {

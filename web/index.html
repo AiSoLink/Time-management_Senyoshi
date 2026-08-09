@@ -2,58 +2,94 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>時間管理システム</title>
+  <title>機種選択 - 時間管理システム</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="container">
     <h1>時間管理システム</h1>
-    <h2>1) 会社</h2>
+    <h2>1) 機種を選択</h2>
     <p id="err" class="err" style="display:none;"></p>
-    <div id="companies" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
-    <hr style="margin: 20px 0" />
-    <h3>会社追加</h3>
-    <div style="display:flex; gap:8px;">
-      <input type="text" id="name" placeholder="会社名" style="padding:8px; width:320px" />
-      <button type="button" id="btnAdd" class="btn-primary">追加</button>
-    </div>
+    <div id="devices" style="display:flex; gap:10px;"></div>
+    <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
   </div>
+
+  <!-- 説明パネル（右サイドバー） -->
+  <div class="guide-panel" id="guidePanel">
+    <h3>操作ガイド</h3>
+    <div id="guideContent"></div>
+  </div>
+
   <script src="app.js"></script>
   <script>
+    var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
+    var DEFAULT_COMPANY = "サンプルA";
+
     var errEl = document.getElementById("err");
-    var companiesEl = document.getElementById("companies");
-    var nameInput = document.getElementById("name");
-    var btnAdd = document.getElementById("btnAdd");
+    var devicesEl = document.getElementById("devices");
 
     function showErr(msg) {
       errEl.textContent = msg || "";
       errEl.style.display = msg ? "block" : "none";
     }
 
-    function refresh() {
-      apiGet("/api/companies").then(function (data) {
-        companiesEl.innerHTML = "";
-        (data.companies || []).forEach(function (c) {
-          var a = document.createElement("a");
-          a.href = "device.html?company=" + encodeURIComponent(c);
-          a.className = "link-card";
-          a.textContent = c;
-          companiesEl.appendChild(a);
-        });
-      }).catch(function (e) { showErr(String(e)); });
+    function updateGuide(title, description, steps) {
+      var html = '';
+      if (title) {
+        html += '<div class="guide-step"><div class="guide-step-title">' + title + '</div>';
+        if (description) {
+          var descWithBreaks = description.replace(/\n/g, '<br>');
+          html += '<div class="guide-step-desc">' + descWithBreaks + '</div>';
+        }
+        if (steps && steps.length > 0) {
+          html += '<ul class="guide-checklist">';
+          steps.forEach(function (step) {
+            var stepWithBreaks = step.replace(/\n/g, '<br>');
+            html += '<li>' + stepWithBreaks + '</li>';
+          });
+          html += '</ul>';
+        }
+        html += '</div>';
+      }
+      document.getElementById("guideContent").innerHTML = html;
     }
 
-    btnAdd.addEventListener("click", function () {
-      var name = (nameInput.value || "").trim();
-      if (!name) return;
-      showErr("");
-      apiPostJson("/api/companies", { name: name }).then(function () {
-        nameInput.value = "";
-        refresh();
-      }).catch(function (e) { showErr(String(e)); });
-    });
+    updateGuide(
+      "ステップ 1/3：機種を選択",
+      "使用するデジタコの\n機種をクリック",
+      [
+        "みまもり、またはテレコムを選択",
+        "グレー表示は使用不可",
+        "完了したら次の画面へ"
+      ]
+    );
 
-    refresh();
+    apiGet("/api/companies/" + encodeURIComponent(DEFAULT_COMPANY) + "/devices")
+      .then(function (data) {
+        devicesEl.innerHTML = "";
+        (data.devices || []).forEach(function (d) {
+          var a = document.createElement("a");
+          a.textContent = DEVICE_DISPLAY[d.name] || d.name;
+          a.style.padding = "10px 12px";
+          a.style.border = "1px solid #444";
+          a.style.borderRadius = "8px";
+          a.style.textDecoration = "none";
+          a.style.color = "inherit";
+          a.style.opacity = d.preset ? "1" : "0.5";
+          a.style.pointerEvents = d.preset ? "auto" : "none";
+          if (d.preset) {
+            a.href = "run.html?company=" + encodeURIComponent(DEFAULT_COMPANY) + "&device=" + encodeURIComponent(d.name);
+          } else {
+            a.href = "#";
+          }
+          devicesEl.appendChild(a);
+        });
+      })
+      .catch(function (e) {
+        var errMsg = String(e);
+        showErr(errMsg);
+        updateGuide("エラー", errMsg, []);
+      });
   </script>
 </body>
 </html>

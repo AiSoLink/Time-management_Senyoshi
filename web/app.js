@@ -15,7 +15,9 @@
       try {
         var j = JSON.parse(text);
         if (typeof j.detail === "string") msg = j.detail;
-      } catch (e) {}
+      } catch (e) {
+        console.error("JSON解析エラー:", e);
+      }
       throw new Error(msg || "エラー (" + res.status + ")");
     });
   }
