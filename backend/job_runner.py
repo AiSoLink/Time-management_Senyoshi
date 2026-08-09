@@ -14,6 +14,54 @@ from engine.alcohol_integration import integrate_alcohol, write_integrated_excel
 LONG_RUN_HOURS = 24
 
 
+def _roster_path(company: str) -> Path:
+    return COMPANIES_DIR / company / "roster.json"
+
+
+def _load_roster(company: str) -> List[Dict[str, Any]]:
+    p = _roster_path(company)
+    if not p.exists():
+        return []
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        return data.get("乗務員一覧") or []
+    except Exception:
+        return []
+
+
+def _update_roster_and_find_missing(company: str, run_states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """今回の日報に登場した乗務員を会社の名簿へ蓄積し、
+    「名簿にいるのに今回の日報にいない乗務員」を返す（初回＝名簿が無い場合は空）。"""
+    prior = _load_roster(company)
+    crew_now: Dict[str, Dict[str, Any]] = {}
+    for rs in run_states or []:
+        mh = rs.get("merged_header") or {}
+        norm = _normalize_crew_id(mh.get("乗務員ID"))
+        if not norm:
+            continue
+        crew_now[norm] = {"乗務員ID": mh.get("乗務員ID"), "乗務員名": mh.get("乗務員名")}
+    missing = [
+        m for m in prior
+        if _normalize_crew_id(m.get("乗務員ID")) not in crew_now
+    ] if prior else []
+    # 名簿へマージ（今回の名前情報で更新、過去の人は残す）
+    merged: Dict[str, Dict[str, Any]] = {}
+    for m in prior:
+        norm = _normalize_crew_id(m.get("乗務員ID"))
+        if norm:
+            merged[norm] = m
+    merged.update(crew_now)
+    roster = sorted(merged.values(), key=lambda m: str(m.get("乗務員ID") or ""))
+    try:
+        _roster_path(company).write_text(
+            json.dumps({"乗務員一覧": roster}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+    return missing
+
+
 def _detect_long_runs(run_states: List[Dict[str, Any]], input_dir: Path) -> List[Dict[str, Any]]:
     """拘束が LONG_RUN_HOURS 以上の運行を検知し、アルコール検査から修正・分割の候補を付けて返す。"""
     try:
@@ -129,30 +177,26 @@ def run_job(job_id: str) -> None:
         state.warnCount = result.warn_count
 
         if getattr(result, "merge_decision_required", False) and result.run_states is not None and result.merge_groups is not None:
+            # 名簿を更新し、名簿にいるのに今回の日報にいない乗務員を検出（初回は名簿が無いのでスキップ）
+            roster_missing = _update_roster_and_find_missing(state.company, result.run_states)
             # 帰庫の押し忘れが疑われる長時間運行があれば、先に確認画面（ステップ0）へ回す
             long_runs = _detect_long_runs(result.run_states, input_dir)
-            if long_runs:
-                state.status = "long_run_check_required"
-                state.artifacts = Artifacts(excel=False, log=True, skipped=True)
-                manual_data = {
-                    "run_states": result.run_states,
-                    "headers": result.headers or [],
-                    "longRuns": long_runs,
-                }
-                (out_dir / "manual_input_state.json").write_text(
-                    json.dumps(manual_data, ensure_ascii=False, indent=2, default=str),
-                    encoding="utf-8",
-                )
-                state.finishedAt = iso_now()
-                save_state(state_path, state)
-                return
-            state.status = "merge_decision_required"
-            state.artifacts = Artifacts(excel=False, log=True, skipped=True)
+            next_status = "long_run_check_required" if long_runs else "merge_decision_required"
             manual_data = {
                 "run_states": result.run_states,
                 "headers": result.headers or [],
                 "mergeGroups": result.merge_groups,
             }
+            if long_runs:
+                manual_data["longRuns"] = long_runs
+            if roster_missing:
+                # 名簿チェックを最優先で表示（日報の追加＝再処理があり得るため）
+                manual_data["rosterMissing"] = roster_missing
+                manual_data["nextStatus"] = next_status
+                state.status = "roster_check_required"
+            else:
+                state.status = next_status
+            state.artifacts = Artifacts(excel=False, log=True, skipped=True)
             (out_dir / "manual_input_state.json").write_text(
                 json.dumps(manual_data, ensure_ascii=False, indent=2, default=str),
                 encoding="utf-8",

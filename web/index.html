@@ -2,16 +2,16 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <title>機種選択 - 時間管理システム</title>
+  <title>会社選択 - 時間管理システム</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div class="container">
     <h1>時間管理システム</h1>
-    <h2>前準備：機種を選択</h2>
+    <h2>前準備：会社を選択</h2>
     <p id="err" class="err" style="display:none;"></p>
-    <div id="devices" style="display:flex; gap:10px;"></div>
-    <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
+    <p style="color:#666;margin-bottom:20px;line-height:1.6;">処理する会社を選択してください。</p>
+    <div id="companies" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;"></div>
   </div>
 
   <!-- 説明パネル（右サイドバー） -->
@@ -24,11 +24,8 @@
 
   <script src="app.js?v=20260810"></script>
   <script>
-    var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
-    var DEFAULT_COMPANY = "サンプルA";
-
     var errEl = document.getElementById("err");
-    var devicesEl = document.getElementById("devices");
+    var companiesEl = document.getElementById("companies");
 
     function showErr(msg) {
       errEl.textContent = msg || "";
@@ -57,36 +54,39 @@
     }
 
     updateGuide(
-      "前準備：機種を選択",
-      "使用するデジタコの\n機種をクリック",
+      "前準備：会社を選択",
+      "処理する会社を\nクリックしてください。",
       [
-        "みまもり、またはテレコムを選択",
-        "グレー表示は使用不可",
-        "完了したら次の画面へ"
+        "会社ごとに乗務員の名簿を\n保持しています",
+        "2回目以降は、名簿にいるのに\n日報が無い乗務員を\nお知らせします"
       ]
     );
     if (window.renderFlow) renderFlow("prep");
 
-    apiGet("/api/companies/" + encodeURIComponent(DEFAULT_COMPANY) + "/devices")
+    apiGet("/api/companies")
       .then(function (data) {
-        devicesEl.innerHTML = "";
-        (data.devices || []).forEach(function (d) {
+        companiesEl.innerHTML = "";
+        (data.companies || []).forEach(function (name) {
           var a = document.createElement("a");
-          a.textContent = DEVICE_DISPLAY[d.name] || d.name;
-          a.style.padding = "10px 12px";
-          a.style.border = "1px solid #444";
-          a.style.borderRadius = "8px";
+          a.textContent = name;
+          a.style.display = "block";
+          a.style.padding = "20px";
+          a.style.border = "1px solid #d4dae3";
+          a.style.background = "#fff";
+          a.style.borderRadius = "10px";
           a.style.textDecoration = "none";
-          a.style.color = "inherit";
-          a.style.opacity = d.preset ? "1" : "0.5";
-          a.style.pointerEvents = d.preset ? "auto" : "none";
-          if (d.preset) {
-            a.href = "run.html?company=" + encodeURIComponent(DEFAULT_COMPANY) + "&device=" + encodeURIComponent(d.name);
-          } else {
-            a.href = "#";
-          }
-          devicesEl.appendChild(a);
+          a.style.color = "#1d4ed8";
+          a.style.fontWeight = "700";
+          a.style.fontSize = "16px";
+          a.style.textAlign = "center";
+          a.style.cursor = "pointer";
+          a.style.boxShadow = "0 1px 4px rgba(25, 40, 70, 0.06)";
+          a.href = "device.html?company=" + encodeURIComponent(name);
+          companiesEl.appendChild(a);
         });
+        if (!(data.companies || []).length) {
+          companiesEl.innerHTML = '<p style="color:#666;">会社が登録されていません。</p>';
+        }
       })
       .catch(function (e) {
         var errMsg = String(e);

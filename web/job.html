@@ -425,6 +425,10 @@
       return;
     }
 
+    if (job.status === "roster_check_required" && job.rosterMissing && job.rosterMissing.length > 0) {
+      renderRosterCheck();
+      return;
+    }
     if (job.status === "long_run_check_required" && job.longRuns && job.longRuns.length > 0) {
       renderLongRunCheck();
       return;
@@ -523,6 +527,92 @@
     }
     contentEl.innerHTML = "<p>⚠️ 不明な状態: " + (job.status || "—") + "</p>";
     updateGuide("状態確認中", "システムが不明な状態です。ページをリロードしてください。", []);
+  }
+
+  function renderRosterCheck() {
+    var missing = job.rosterMissing || [];
+    var html = '<div style="background:#fff8e1;border:1px solid #ffe0b2;border-radius:10px;padding:18px;margin-bottom:24px;">';
+    html += '<p style="margin:0;color:#7a4f01;line-height:1.8;font-size:14px;"><strong>これまでの名簿にいる以下の乗務員の日報が、今回ありませんでした。</strong><br>退職・休み・運行なしであれば問題ありません。<br>日報の入れ忘れの場合は、この画面から追加できます。</p></div>';
+    html += '<div style="background:white;border:1px solid #ddd;border-radius:10px;padding:18px;margin-bottom:20px;">';
+    html += '<div style="font-size:13px;font-weight:700;color:#4b5563;margin-bottom:10px;">日報が無かった乗務員（' + missing.length + '名）</div>';
+    missing.forEach(function (m, mi) {
+      html += '<div style="display:flex;align-items:center;gap:12px;padding:8px 12px;background:' + (mi % 2 === 0 ? '#fafbfd' : '#fff') + ';border-radius:6px;font-size:14px;">'
+        + '<span style="font-weight:600;">' + (m.乗務員名 || "—") + '</span>'
+        + '<span style="color:#999;font-size:12px;">' + (m.乗務員ID || "—") + '</span></div>';
+    });
+    html += '</div>';
+    var dis = submitting ? " disabled" : "";
+    html += '<div style="font-size:14px;font-weight:700;color:#1a1d23;margin:0 0 10px 0;">この人たちの日報が無くて大丈夫ですか？</div>';
+    html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;">';
+    html += '<button type="button" id="btnRosterOk" class="btn-primary" style="flex:1;min-width:220px;"' + dis + '>' + (submitting ? "処理中..." : "大丈夫（今回は運行なし）→ 次へ進む") + '</button>';
+    html += '</div>';
+    html += '<div style="background:#f6f8fb;border:1px solid #e4eaf3;border-radius:10px;padding:18px;">';
+    html += '<div style="font-size:13px;font-weight:700;color:#4b5563;margin-bottom:8px;">日報の入れ忘れだった場合</div>';
+    html += '<div style="font-size:12px;color:#666;margin-bottom:10px;">足りなかった乗務員の日報PDFを選択して追加してください。追加後、全体を再処理します。</div>';
+    html += '<input type="file" accept="application/pdf" multiple id="rosterPdfs" style="width:100%;margin-bottom:10px;">';
+    html += '<button type="button" id="btnRosterAdd" class="btn-secondary" style="width:100%;"' + dis + '>' + (submitting ? "処理中..." : "この日報を追加して再処理する") + '</button>';
+    html += '</div>';
+    document.getElementById("content").innerHTML = html;
+
+    updateGuide(
+      "前準備：名簿の確認",
+      "前回までに登場した乗務員のうち\n今回の日報に無い人を\nお知らせしています。",
+      [
+        "運行なし・休みなら\n「大丈夫」で次へ",
+        "入れ忘れなら日報PDFを\n選択して追加",
+        "追加すると全体を\n再処理します"
+      ]
+    );
+
+    var okBtn = document.getElementById("btnRosterOk");
+    if (okBtn) okBtn.addEventListener("click", function () {
+      if (submitting) return;
+      setErr("");
+      submitting = true;
+      render();
+      apiPostJson("/api/jobs/" + encodeURIComponent(jobId) + "/complete-roster-check", {})
+        .then(function () { return fetchJob(); })
+        .then(function (j) {
+          job = j;
+          restoreSelectionsFromJob(j);
+          submitting = false;
+          render();
+        })
+        .catch(function (e) {
+          setErr(String(e));
+          submitting = false;
+          render();
+        });
+    });
+    var addBtn = document.getElementById("btnRosterAdd");
+    if (addBtn) addBtn.addEventListener("click", function () {
+      if (submitting) return;
+      var input = document.getElementById("rosterPdfs");
+      if (!input.files.length) {
+        setErr("追加する日報PDFを選択してください。");
+        return;
+      }
+      setErr("");
+      submitting = true;
+      render();
+      var fd = new FormData();
+      for (var i = 0; i < input.files.length; i++) fd.append("pdfs", input.files[i]);
+      fetch(API_BASE + "/api/jobs/" + encodeURIComponent(jobId) + "/add-pdfs", { method: "POST", body: fd })
+        .then(function (res) {
+          if (!res.ok) return res.text().then(function (t) { throw new Error(t); });
+          return res.json();
+        })
+        .then(function () {
+          submitting = false;
+          longRunDecisions = {};
+          poll();
+        })
+        .catch(function (e) {
+          setErr(String(e));
+          submitting = false;
+          render();
+        });
+    });
   }
 
   function renderLongRunCheck() {

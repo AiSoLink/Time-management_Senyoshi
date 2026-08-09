@@ -723,6 +723,8 @@ def get_job(jobId: str):
     manual_path = out_dir / "manual_input_state.json"
     if manual_path.exists():
         data = json.loads(manual_path.read_text(encoding="utf-8"))
+        if state.status == "roster_check_required":
+            out["rosterMissing"] = data.get("rosterMissing") or []
         if state.status == "long_run_check_required":
             out["longRuns"] = data.get("longRuns") or []
         if state.status == "merge_decision_required":
@@ -760,6 +762,52 @@ def get_job(jobId: str):
             if state.pendingRows is not None:
                 out["pendingRows"] = _enrich_pending_rows_with_nippo(state.pendingRows, data.get("run_states") or [])
     return out
+
+@app.post("/api/jobs/{jobId}/complete-roster-check")
+def complete_roster_check(jobId: str, body: Dict[str, Any] = Body(...)):
+    """名簿チェック: 「大丈夫（今回は運行なし）」として次のステップへ進む。"""
+    sp = job_state_path(jobId)
+    if not sp.exists():
+        raise HTTPException(status_code=404, detail="Job not found.")
+    state = load_state(sp)
+    if state.status != "roster_check_required":
+        raise HTTPException(status_code=400, detail="この操作は名簿確認画面でのみ実行できます。")
+    manual_path = job_output_dir(jobId) / "manual_input_state.json"
+    if not manual_path.exists():
+        raise HTTPException(status_code=400, detail="作業データが見つかりません。")
+    data = json.loads(manual_path.read_text(encoding="utf-8"))
+    state.status = data.get("nextStatus") or "merge_decision_required"
+    save_state(sp, state)
+    return {"ok": True, "status": state.status}
+
+
+@app.post("/api/jobs/{jobId}/add-pdfs")
+async def add_pdfs(jobId: str, background: BackgroundTasks, pdfs: List[UploadFile] = File(...)):
+    """名簿チェック: 足りなかった乗務員の日報PDFを追加し、ジョブ全体を再処理する。"""
+    sp = job_state_path(jobId)
+    if not sp.exists():
+        raise HTTPException(status_code=404, detail="Job not found.")
+    state = load_state(sp)
+    if not pdfs:
+        raise HTTPException(status_code=400, detail="追加する日報PDFを選択してください。")
+    inp = job_input_dir(jobId)
+    if not inp.exists():
+        raise HTTPException(status_code=400, detail="元の入力ファイルが見つかりません。")
+    for f in pdfs:
+        data = await f.read()
+        name = safe_name(Path(f.filename or "").name or "file")
+        if not name.lower().endswith(".pdf"):
+            name += ".pdf"
+        (inp / name).write_bytes(data)
+    state.status = "queued"
+    state.totalPdfs = len(list(inp.glob("*.pdf")))
+    state.processedPdfs = 0
+    state.pendingRows = None
+    state.artifacts = Artifacts(excel=False, log=False, skipped=False)
+    save_state(sp, state)
+    background.add_task(run_job, jobId)
+    return JSONResponse(status_code=202, content={"ok": True, "jobId": jobId})
+
 
 def _split_details_by_time(details: List[Dict[str, Any]], out_dt_str: Any, t_mid) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """作業明細（時刻は HH:MM のみ）を出庫日からの日跨ぎを追いながら絶対時刻化し、t_mid 以前/以降で2分割する。"""
