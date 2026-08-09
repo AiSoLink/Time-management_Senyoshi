@@ -1005,6 +1005,11 @@ def apply_alcohol_to_run_states(
     for rs in run_states:
         mh = rs.get("merged_header") or {}
         orig_out, orig_in = mh.get("出庫日時"), mh.get("帰庫日時")
+        # 日報（デジタコ）の元時刻を退避。手入力画面で「日報の時刻を使う」参照に使う
+        if orig_out and not mh.get("_digitaco_出庫日時"):
+            mh["_digitaco_出庫日時"] = orig_out
+        if orig_in and not mh.get("_digitaco_帰庫日時"):
+            mh["_digitaco_帰庫日時"] = orig_in
         out_matched, in_matched = match_alcohol_for_run(
             alcohol_events,
             mh.get("乗務員ID"),

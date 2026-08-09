@@ -8,25 +8,30 @@
 <body>
   <div class="container">
     <h1>時間管理システム</h1>
-    <h2>2) ファイルをアップロード</h2>
+    <h2>前準備：ファイルをアップロード</h2>
     <p>機種：<b id="deviceLabel"></b></p>
     <p id="err" class="err" style="display:none;"></p>
 
     <div id="uploadSection">
+      <div id="rerunBanner" style="display:none;background:#fffbf0;border:1px solid #ffe0b2;border-radius:8px;padding:16px;margin-bottom:16px;">
+        <div style="font-weight:600;color:#e65100;font-size:14px;margin-bottom:4px;">前回アップロードしたファイルを再利用できます</div>
+        <div id="rerunDetail" style="font-size:12px;color:#666;margin-bottom:12px;"></div>
+        <button type="button" id="btnRerun" class="btn-primary" style="width:100%;padding:10px;">前回のファイルで再実行（アップロード不要）</button>
+      </div>
       <div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:24px;margin-bottom:24px;">
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:20px;margin-bottom:24px;">
           <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
-            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;" id="digitacoLabel">デジタコ（必須）</div>
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;" id="digitacoLabel">日報（必須）</div>
             <input type="file" accept="application/pdf" multiple id="pdfs" style="width:100%;"/>
             <span id="pdfCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
           </div>
           <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
-            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">対面アルコール</div>
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">対面アルコール（必須）</div>
             <input type="file" multiple id="taimen" style="width:100%;"/>
             <span id="taimenCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
           </div>
           <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
-            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">アルキラー（遠隔）</div>
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">アルキラー（遠隔・必須）</div>
             <input type="file" multiple id="alcohol" style="width:100%;"/>
             <span id="alcoholCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
           </div>
@@ -56,11 +61,13 @@
 
   <!-- 説明パネル（右サイドバー） -->
   <div class="guide-panel" id="guidePanel">
-    <h3>操作ガイド</h3>
+    <div class="panel-section-title">操作ガイド</div>
     <div id="guideContent"></div>
+    <div class="panel-section-title panel-flow-title">作業の流れ</div>
+    <div id="flowContent"></div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20260810"></script>
   <script>
     var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
     var params = new URLSearchParams(location.search);
@@ -69,7 +76,7 @@
     var deviceLabel = device ? (DEVICE_DISPLAY[device] || device) : "";
 
     document.getElementById("deviceLabel").textContent = deviceLabel || "—";
-    document.getElementById("digitacoLabel").textContent = deviceLabel || "みまもり / テレコム（デジタコ）";
+    document.getElementById("digitacoLabel").textContent = deviceLabel || "日報（みまもり / テレコム）";
 
     var errEl = document.getElementById("err");
     var uploadSection = document.getElementById("uploadSection");
@@ -112,7 +119,9 @@
       document.getElementById("pdfCount").textContent = pdfInput.files.length ? pdfInput.files.length + "件" : "";
       document.getElementById("taimenCount").textContent = taimenInput.files.length ? taimenInput.files.length + "件" : "";
       document.getElementById("alcoholCount").textContent = alcoholInput.files.length ? alcoholInput.files.length + "件" : "";
-      document.getElementById("btnStart").disabled = pdfInput.files.length === 0;
+      /* 日報・対面アルコール・アルキラーの3種類すべて必須 */
+      document.getElementById("btnStart").disabled =
+        pdfInput.files.length === 0 || taimenInput.files.length === 0 || alcoholInput.files.length === 0;
     }
     pdfInput.addEventListener("change", updateCounts);
     taimenInput.addEventListener("change", updateCounts);
@@ -120,19 +129,75 @@
     updateCounts();
 
     updateGuide(
-      "ステップ 2/3：ファイルを選択",
-      "必要なファイルを\n選択してください。",
+      "前準備：ファイルを選択",
+      "3種類のファイルを\nすべて選択してください。\n（すべて必須です）",
       [
-        "デジタコ：必須",
-        "対面アルコール：選択可",
-        "アルキラー（遠隔）：選択可",
-        "複数ファイル選択可能",
-        "実行ボタンをクリック"
+        "日報（PDF）",
+        "対面アルコール",
+        "アルキラー（遠隔）",
+        "それぞれ複数ファイル選択可能",
+        "3種類そろうと「実行」が\n押せるようになります"
       ]
     );
+    if (window.renderFlow) renderFlow("prep");
+
+    /* 前回アップロードしたファイルをサーバー側で再利用できるようにする。
+       画面を離れて戻ってきてもファイルの再選択を不要にするための仕組み。 */
+    var LAST_JOB_KEY = "tm_last_job";
+    function loadLastJob() {
+      try {
+        var raw = localStorage.getItem(LAST_JOB_KEY);
+        if (!raw) return null;
+        var o = JSON.parse(raw);
+        if (!o || !o.jobId) return null;
+        if (company && o.company && o.company !== company) return null;
+        if (device && o.device && o.device !== device) return null;
+        return o;
+      } catch (e) { return null; }
+    }
+    function saveLastJob(id, fileSummary) {
+      try {
+        localStorage.setItem(LAST_JOB_KEY, JSON.stringify({
+          jobId: id,
+          company: company,
+          device: device,
+          files: fileSummary || "",
+          savedAt: new Date().toLocaleString("ja-JP")
+        }));
+      } catch (e) {}
+    }
+    var lastJob = loadLastJob();
+    if (lastJob) {
+      document.getElementById("rerunBanner").style.display = "block";
+      document.getElementById("rerunDetail").textContent =
+        (lastJob.files || "前回のファイル一式") + (lastJob.savedAt ? "（" + lastJob.savedAt + " にアップロード）" : "");
+    }
+    document.getElementById("btnRerun").addEventListener("click", function () {
+      if (!lastJob) return;
+      showErr("");
+      var btn = document.getElementById("btnRerun");
+      btn.disabled = true;
+      btn.textContent = "再実行の準備中...";
+      apiPostJson("/api/jobs/" + encodeURIComponent(lastJob.jobId) + "/rerun", {})
+        .then(function (data) {
+          jobId = data.jobId;
+          saveLastJob(jobId, lastJob.files);
+          uploadSection.style.display = "none";
+          progressSection.style.display = "block";
+          poll();
+        })
+        .catch(function (e) {
+          showErr(String(e));
+          btn.disabled = false;
+          btn.textContent = "前回のファイルで再実行（アップロード不要）";
+        });
+    });
 
     document.getElementById("btnStart").addEventListener("click", function () {
-      if (pdfInput.files.length === 0) return;
+      if (pdfInput.files.length === 0 || taimenInput.files.length === 0 || alcoholInput.files.length === 0) {
+        showErr("日報・対面アルコール・アルキラー（遠隔）の3種類すべてのファイルを選択してください。");
+        return;
+      }
       showErr("");
       var fd = new FormData();
       fd.append("company", company);
@@ -143,7 +208,7 @@
       document.getElementById("btnStart").disabled = true;
       document.getElementById("btnStart").textContent = "送信中...";
       updateGuide(
-        "ステップ 2/3：アップロード中",
+        "前準備：アップロード中",
         "ファイルを\nサーバーに送信中です。\n\nしばらくお待ちください。",
         []
       );
@@ -154,6 +219,10 @@
         })
         .then(function (data) {
           jobId = data.jobId;
+          var fileSummary = "日報PDF " + pdfInput.files.length + "件"
+            + (taimenInput.files.length ? "・対面アルコール " + taimenInput.files.length + "件" : "")
+            + (alcoholInput.files.length ? "・アルキラー " + alcoholInput.files.length + "件" : "");
+          saveLastJob(jobId, fileSummary);
           uploadSection.style.display = "none";
           progressSection.style.display = "block";
           document.getElementById("btnStart").disabled = false;
@@ -183,7 +252,7 @@
         document.getElementById("progressBar").style.width = pct + "%";
         document.getElementById("progressDetail").textContent = j.processedPdfs + " / " + j.totalPdfs + " PDF 処理済み";
         updateGuide(
-          "ステップ 2/3：処理中... (" + pct + "%)",
+          "前準備：処理中... (" + pct + "%)",
           "PDFファイルを分析しています。\n電源を切らずにお待ちください。",
           [
             "処理中：" + j.processedPdfs + " / " + j.totalPdfs + " ファイル"
@@ -196,7 +265,7 @@
           progressSection.style.display = "none";
           doneSection.style.display = "block";
           updateGuide(
-            "ステップ 2/3：完了 ✅",
+            "前準備：完了 ✅",
             "ファイルの分析が完了しました。\n「結果を確認する」をクリックしてください。",
             []
           );

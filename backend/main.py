@@ -33,6 +33,7 @@ from engine.pipeline import (
     _get_drive_compare_logger,
     _get_rest_compare_logger,
     vehicle_plate_display,
+    _detect_merge_groups,
 )
 from engine.alcohol_integration import integrate_alcohol, alcohol_runs_by_crew, alcohol_only_crew_list, _normalize_crew_id as normalize_crew_id
 from uuid import uuid4
@@ -585,7 +586,11 @@ async def create_job(
         if not preset.exists():
             raise HTTPException(status_code=400, detail="Preset JSON not found for this device.")
         if not pdfs:
-            raise HTTPException(status_code=400, detail="No PDFs uploaded.")
+            raise HTTPException(status_code=400, detail="日報のPDFファイルを選択してください。")
+        if not taimen:
+            raise HTTPException(status_code=400, detail="対面アルコールのファイルを選択してください。")
+        if not alcohol:
+            raise HTTPException(status_code=400, detail="アルキラー（遠隔）のファイルを選択してください。")
 
         job_id = time.strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:6]
         inp = job_input_dir(job_id)
@@ -645,6 +650,53 @@ async def create_job(
         _write_upload_error_log(msg)
         raise HTTPException(status_code=500, detail=f"Upload failed: {type(e).__name__}: {e}")
 
+@app.post("/api/jobs/{jobId}/rerun")
+def rerun_job(jobId: str, background: BackgroundTasks):
+    """前回アップロードしたファイルを再利用して新しいジョブとして再実行する（再アップロード不要）。"""
+    old_inp = job_input_dir(jobId)
+    old_sp = job_state_path(jobId)
+    if not old_inp.exists() or not old_sp.exists():
+        raise HTTPException(status_code=404, detail="元のジョブが見つかりません。もう一度ファイルを選択してください。")
+    old_state = load_state(old_sp)
+    pdf_count = len(list(old_inp.glob("*.pdf")))
+    if pdf_count == 0:
+        raise HTTPException(status_code=400, detail="元のジョブに入力ファイルがありません。")
+    new_id = time.strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:6]
+    shutil.copytree(old_inp, job_input_dir(new_id))
+    job_output_dir(new_id).mkdir(parents=True, exist_ok=True)
+    state = JobState(
+        jobId=new_id,
+        company=old_state.company,
+        device=old_state.device,
+        status="queued",
+        totalPdfs=pdf_count,
+        processedPdfs=0,
+        errorCount=0,
+        warnCount=0,
+        startedAt=None,
+        finishedAt=None,
+        artifacts=Artifacts(excel=False, log=False, skipped=False),
+    )
+    save_state(job_state_path(new_id), state)
+    background.add_task(run_job, new_id)
+    return JSONResponse(status_code=202, content={"jobId": new_id})
+
+
+def _enrich_pending_rows_with_nippo(pending_rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """手入力画面の pendingRows に日報（デジタコ）の元時刻を付与する。
+    出庫・帰庫の最終時刻はアルコール突合で上書きされるため、日報の元時刻は merged_header の退避キーから取る。"""
+    out: List[Dict[str, Any]] = []
+    for p in pending_rows or []:
+        i = p.get("rowIndex")
+        add: Dict[str, Any] = {"日報出庫日時": "", "日報帰庫日時": ""}
+        if isinstance(i, int) and 0 <= i < len(run_states):
+            mh = (run_states[i] or {}).get("merged_header") or {}
+            add["日報出庫日時"] = mh.get("_digitaco_出庫日時") or ""
+            add["日報帰庫日時"] = mh.get("_digitaco_帰庫日時") or ""
+        out.append({**p, **add})
+    return out
+
+
 def _enrich_driver_rows_with_plate(driver_rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """車番実装前に保存されたジョブの driverRows には車番が無いため、run_states の merged_header から補完する。"""
     out: List[Dict[str, Any]] = []
@@ -671,6 +723,8 @@ def get_job(jobId: str):
     manual_path = out_dir / "manual_input_state.json"
     if manual_path.exists():
         data = json.loads(manual_path.read_text(encoding="utf-8"))
+        if state.status == "long_run_check_required":
+            out["longRuns"] = data.get("longRuns") or []
         if state.status == "merge_decision_required":
             out["mergeGroups"] = data.get("mergeGroups") or []
             # 1つ前に戻ったときに入力内容を復元するため
@@ -703,7 +757,145 @@ def get_job(jobId: str):
         if state.status == "manual_input_required":
             out["driverRows"] = _enrich_driver_rows_with_plate(data.get("driverRows") or [], data.get("run_states") or [])
             out["alcoholRunsByCrew"] = data.get("alcoholRunsByCrew") or {}
+            if state.pendingRows is not None:
+                out["pendingRows"] = _enrich_pending_rows_with_nippo(state.pendingRows, data.get("run_states") or [])
     return out
+
+def _split_details_by_time(details: List[Dict[str, Any]], out_dt_str: Any, t_mid) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+    """作業明細（時刻は HH:MM のみ）を出庫日からの日跨ぎを追いながら絶対時刻化し、t_mid 以前/以降で2分割する。"""
+    base = _row_to_dt(out_dt_str)
+    first: List[Dict[str, Any]] = []
+    second: List[Dict[str, Any]] = []
+    if base is None or t_mid is None:
+        return list(details), []
+    prev = None
+    day_offset = 0
+    for d in details:
+        tm = str(d.get("arrival") or d.get("depart") or "").strip()
+        cur = None
+        m = re.match(r"^(\d{1,2}):(\d{2})$", tm)
+        if m:
+            try:
+                cur = base.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0) + timedelta(days=day_offset)
+                if prev is not None and cur < prev:
+                    day_offset += 1
+                    cur = cur + timedelta(days=1)
+                prev = cur
+            except ValueError:
+                cur = None
+        if cur is None:
+            # 時刻が読めない行は直前の行と同じ側に入れる
+            (second if second else first).append(d)
+            continue
+        (first if cur <= t_mid else second).append(d)
+    return first, second
+
+
+@app.post("/api/jobs/{jobId}/complete-long-run-check")
+def complete_long_run_check(jobId: str, body: Dict[str, Any] = Body(...)):
+    """ステップ0: 帰庫押し忘れ疑いの長時間運行について、修正（帰庫時刻変更）または分割（2運行化）を適用する。"""
+    sp = job_state_path(jobId)
+    if not sp.exists():
+        raise HTTPException(status_code=404, detail="Job not found.")
+    state = load_state(sp)
+    if state.status != "long_run_check_required":
+        raise HTTPException(status_code=400, detail="この操作は長時間運行の確認画面でのみ実行できます。")
+    out_dir = job_output_dir(jobId)
+    manual_path = out_dir / "manual_input_state.json"
+    if not manual_path.exists():
+        raise HTTPException(status_code=400, detail="作業データが見つかりません。")
+    data = json.loads(manual_path.read_text(encoding="utf-8"))
+    run_states = data.get("run_states") or []
+    headers = data.get("headers") or []
+    if not run_states or not headers:
+        raise HTTPException(status_code=400, detail="作業データが不正です。")
+    decisions = body.get("decisions") or []
+
+    # 分割で挿入すると後ろの rowIndex がずれるため、大きい行から処理する
+    def _dec_row(d):
+        try:
+            return int(d.get("rowIndex", -1))
+        except (TypeError, ValueError):
+            return -1
+    for d in sorted(decisions, key=_dec_row, reverse=True):
+        i = _dec_row(d)
+        if i < 0 or i >= len(run_states):
+            continue
+        action = d.get("action") or "keep"
+        rs = run_states[i]
+        mh = rs.get("merged_header") or {}
+        mr = rs.get("merged_row") or {}
+        if action == "fix":
+            new_in = str(d.get("帰庫日時") or "").strip()
+            if not new_in:
+                raise HTTPException(status_code=400, detail="修正後の帰庫日時が指定されていません。")
+            mh["帰庫日時"] = new_in
+            mh["_digitaco_帰庫日時"] = new_in
+            if mr:
+                mr["帰庫日時"] = new_in
+        elif action == "split":
+            t1 = str(d.get("分割帰庫") or "").strip()
+            t2 = str(d.get("分割出庫") or "").strip()
+            t1_dt, t2_dt = _row_to_dt(t1), _row_to_dt(t2)
+            if not t1_dt or not t2_dt or t2_dt <= t1_dt:
+                raise HTTPException(status_code=400, detail="分割の帰庫・出庫日時が不正です。")
+            rs2 = copy.deepcopy(rs)
+            mh2 = rs2.get("merged_header") or {}
+            mr2 = rs2.get("merged_row") or {}
+            orig_out_dt = _row_to_dt(mh.get("出庫日時"))
+            orig_in_dt = _row_to_dt(mh.get("帰庫日時"))
+            # 1本目: 帰庫を t1 に。帰庫メーターは不明になるため空にする
+            mh["帰庫日時"] = t1
+            mh["_digitaco_帰庫日時"] = t1
+            mh["帰庫メーター"] = None
+            if mr:
+                mr["帰庫日時"] = t1
+                mr["帰庫メーター"] = None
+            # 2本目: 出庫を t2 に。運行ID・運行日を更新し、出庫メーターは空にする
+            mh2["出庫日時"] = t2
+            mh2["_digitaco_出庫日時"] = t2
+            mh2["出庫メーター"] = None
+            mh2["運行日"] = t2[:10]
+            mh2["運行ID"] = (str(mh2.get("運行ID") or "") + "-2") if mh2.get("運行ID") else None
+            rs2["report_id"] = (str(rs2.get("report_id") or "") + "-2") if rs2.get("report_id") else rs2.get("report_id")
+            if mr2:
+                mr2["出庫日時"] = t2
+                mr2["出庫メーター"] = None
+                mr2["運行日"] = t2[:10]
+                if mr2.get("運行ID"):
+                    mr2["運行ID"] = str(mr2["運行ID"]) + "-2"
+            # 作業明細を分割点で2つに分ける
+            t_mid = t1_dt + (t2_dt - t1_dt) / 2
+            first, second = _split_details_by_time(rs.get("merged_details") or [], mh.get("_digitaco_出庫日時") or mh.get("出庫日時"), t_mid)
+            rs["merged_details"] = first
+            rs2["merged_details"] = second
+            # 走行時間（分）は各運行の長さで比例配分する（概算）
+            drive_min = mh.get("走行状態_分")
+            if isinstance(drive_min, (int, float)) and orig_out_dt and orig_in_dt and orig_in_dt > orig_out_dt:
+                total_sec = (orig_in_dt - orig_out_dt).total_seconds()
+                sec1 = (t1_dt - orig_out_dt).total_seconds()
+                ratio = max(0.0, min(1.0, sec1 / total_sec))
+                mh["走行状態_分"] = int(round(drive_min * ratio))
+                mh2["走行状態_分"] = int(drive_min) - mh["走行状態_分"]
+            run_states.insert(i + 1, rs2)
+        # action == "keep" は何もしない
+
+    # 修正後の運行で3時間未満グループを再検出し、通常フロー（まとめ画面）へ進める
+    preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"
+    if not preset_path.exists():
+        raise HTTPException(status_code=400, detail="プリセットが見つかりません。")
+    rows = rows_from_run_states(run_states, headers, preset_path, state.device)
+    merge_groups = _detect_merge_groups(rows)
+    new_data = {"run_states": run_states, "headers": headers, "mergeGroups": merge_groups}
+    manual_path.write_text(json.dumps(new_data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    state.status = "merge_decision_required"
+    state.artifacts = Artifacts(excel=False, log=True, skipped=True)
+    save_state(sp, state)
+    if not merge_groups:
+        # まとめ対象が無い場合はまとめ画面を自動スキップして次へ
+        return complete_merge(jobId, {"mergeSets": [], "runDateChoices": []})
+    return {"ok": True, "status": "merge_decision_required"}
+
 
 @app.post("/api/jobs/{jobId}/complete-merge")
 def complete_merge(jobId: str, body: Dict[str, Any] = Body(...)):

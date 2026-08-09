@@ -8,7 +8,7 @@
 <body>
   <div class="container">
     <h1>時間管理システム</h1>
-    <h2>1) 機種を選択</h2>
+    <h2>前準備：機種を選択</h2>
     <p id="err" class="err" style="display:none;"></p>
     <div id="devices" style="display:flex; gap:10px;"></div>
     <p class="back-home"><a href="index.html">← 最初の画面に戻る</a></p>
@@ -16,11 +16,13 @@
 
   <!-- 説明パネル（右サイドバー） -->
   <div class="guide-panel" id="guidePanel">
-    <h3>操作ガイド</h3>
+    <div class="panel-section-title">操作ガイド</div>
     <div id="guideContent"></div>
+    <div class="panel-section-title panel-flow-title">作業の流れ</div>
+    <div id="flowContent"></div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=20260810"></script>
   <script>
     var DEVICE_DISPLAY = { mimamori: "みまもり", telecom: "テレコム" };
     var DEFAULT_COMPANY = "サンプルA";
@@ -55,7 +57,7 @@
     }
 
     updateGuide(
-      "ステップ 1/3：機種を選択",
+      "前準備：機種を選択",
       "使用するデジタコの\n機種をクリック",
       [
         "みまもり、またはテレコムを選択",
@@ -63,6 +65,7 @@
         "完了したら次の画面へ"
       ]
     );
+    if (window.renderFlow) renderFlow("prep");
 
     apiGet("/api/companies/" + encodeURIComponent(DEFAULT_COMPANY) + "/devices")
       .then(function (data) {
