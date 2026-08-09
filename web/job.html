@@ -519,7 +519,7 @@
       if (runs.length > 0) {
         for (var ri = 0; ri < runs.length; ri++) {
           var r = runs[ri];
-          html += (ri > 0 ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e0e0e0;">' : '') + '<div style="font-weight:500;color:#1565c0;">' + (r.車両番号 || r.車両ID || "—") + '</div><div style="color:#666;font-size:12px;">' + (r.所属営業所 || "—") + '</div>' + (ri > 0 ? '</div>' : '');
+          html += (ri > 0 ? '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e0e0e0;">' : '') + '<div style="font-weight:500;color:#1565c0;">' + (r.車番 || r.車両番号 || r.車両ID || "—") + '</div><div style="color:#666;font-size:12px;">' + (r.所属営業所 || "—") + '</div>' + (ri > 0 ? '</div>' : '');
         }
       } else {
         html += "—";
@@ -707,7 +707,7 @@
           var rid = (r.運行ID || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
           var nameAttr = (r.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
           var bgColor = driverBg === 1 ? "#fff" : "#f9f9f9";
-          html += '<div class="link-add-opt" data-gi="' + gi + '" data-rid="' + rid + '" data-driver-bg="' + driverBg + '" data-driver-name="' + nameAttr + '" style="background:' + bgColor + ';padding:12px;border-bottom:1px solid #e0e0e0;cursor:pointer;display:flex;align-items:center;gap:10px;"><input type="checkbox" class="link-add-opt-cb" style="cursor:pointer;width:16px;height:16px;"><div style="flex:1;font-size:13px;"><div style="font-weight:600;color:#1565c0;">' + (r.乗務員名 || "—") + '</div><div style="color:#666;font-size:12px;margin-top:2px;">' + (r.車両番号 || r.車両ID || "—") + '</div><div style="color:#999;font-size:11px;margin-top:2px;">' + (r.出庫日時 || "—") + ' - ' + (r.帰庫日時 || "—") + '</div></div></div>';
+          html += '<div class="link-add-opt" data-gi="' + gi + '" data-rid="' + rid + '" data-driver-bg="' + driverBg + '" data-driver-name="' + nameAttr + '" style="background:' + bgColor + ';padding:12px;border-bottom:1px solid #e0e0e0;cursor:pointer;display:flex;align-items:center;gap:10px;"><input type="checkbox" class="link-add-opt-cb" style="cursor:pointer;width:16px;height:16px;"><div style="flex:1;font-size:13px;"><div style="font-weight:600;color:#1565c0;">' + (r.乗務員名 || "—") + '</div><div style="color:#666;font-size:12px;margin-top:2px;">' + (r.車番 || r.車両番号 || r.車両ID || "—") + '</div><div style="color:#999;font-size:11px;margin-top:2px;">' + (r.出庫日時 || "—") + ' - ' + (r.帰庫日時 || "—") + '</div></div></div>';
         });
         html += '</div>';
         html += "</div></div></div></div>";
@@ -1042,7 +1042,7 @@
           if (sel !== undefined && sel !== null) {
             var chosen = dr.find(function (d) { return d.rowIndex === sel; });
             if (chosen) {
-              var line1 = (chosen.乗務員名 || "—") + " / " + (chosen.車両番号 || chosen.車両ID || "—");
+              var line1 = (chosen.乗務員名 || "—") + " / " + (chosen.車番 || chosen.車両番号 || chosen.車両ID || "—");
               var line2 = "出庫:" + (chosen.出庫日時 || "—") + " 帰庫:" + (chosen.帰庫日時 || "—");
               triggerContent = '<span class="codriver-trigger-line1">' + line1.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span><span class="codriver-trigger-line2">' + line2.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</span>';
             }
@@ -1063,7 +1063,7 @@
           drSorted.forEach(function (d) {
             var name = (d.乗務員名 || "").trim();
             if (name !== optPrevName) { optPrevName = name; optDriverBg = 1 - optDriverBg; }
-            var lab = (d.乗務員名 || "—") + " / " + (d.車両番号 || d.車両ID || "—") + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
+            var lab = (d.乗務員名 || "—") + " / " + (d.車番 || d.車両番号 || d.車両ID || "—") + " 出庫:" + (d.出庫日時 || "—") + " 帰庫:" + (d.帰庫日時 || "—");
             var nameAttr = (d.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
             html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="' + d.rowIndex + '" data-driver-name="' + nameAttr + '" data-driver-bg="' + optDriverBg + '">' + lab.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
           });
@@ -1253,7 +1253,7 @@
       if (driverKey !== manualPrevDriver) { manualPrevDriver = driverKey; manualDriverBg = 1 - manualDriverBg; }
       var manualRowBgClass = "manual-row-bg-" + manualDriverBg;
       var m = getManualRow(r);
-      html += "<tr class=\"" + manualRowBgClass + "\" style=\"background:" + (manualDriverBg === 1 ? "#fff" : "#f9f9f9") + ";\"><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;font-weight:500;white-space:nowrap;\">" + (r.乗務員名 || "—") + "<br><span style=\"font-size:11px;color:#999;\">" + (r.乗務員ID || "—") + "</span></td><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;white-space:nowrap;\">" + (r.運行ID || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;white-space:nowrap;\">" + (r.車両番号 || r.車両ID || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;\">";
+      html += "<tr class=\"" + manualRowBgClass + "\" style=\"background:" + (manualDriverBg === 1 ? "#fff" : "#f9f9f9") + ";\"><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;font-weight:500;white-space:nowrap;\">" + (r.乗務員名 || "—") + "<br><span style=\"font-size:11px;color:#999;\">" + (r.乗務員ID || "—") + "</span></td><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;white-space:nowrap;\">" + (r.運行ID || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;font-size:13px;white-space:nowrap;\">" + (r.車番 || r.車両番号 || r.車両ID || "—") + "</td><td style=\"padding:12px;border:1px solid #ddd;white-space:nowrap;\">";
       html += '<input type="text" class="manual-out-date" data-row="' + r.rowIndex + '" data-field="out-date" value="' + (m.出庫日 || "").replace(/"/g, "&quot;") + '" style="width:80px;margin-right:4px;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;" size="10">';
       html += '<input type="text" inputmode="numeric" class="manual-out-h" data-row="' + r.rowIndex + '" data-field="out-h" value="' + (m.出庫時 || "").replace(/"/g, "&quot;") + '" style="width:32px;padding:6px 4px;border:1px solid #ddd;border-radius:4px;text-align:center;font-size:12px;" maxlength="2">';
       html += '<span style="margin:0 2px;font-size:12px;">:</span>';

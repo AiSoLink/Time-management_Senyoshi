@@ -645,6 +645,19 @@ async def create_job(
         _write_upload_error_log(msg)
         raise HTTPException(status_code=500, detail=f"Upload failed: {type(e).__name__}: {e}")
 
+def _enrich_driver_rows_with_plate(driver_rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """車番実装前に保存されたジョブの driverRows には車番が無いため、run_states の merged_header から補完する。"""
+    out: List[Dict[str, Any]] = []
+    for r in driver_rows:
+        if r.get("車番") is None:
+            i = r.get("rowIndex")
+            if isinstance(i, int) and 0 <= i < len(run_states):
+                mh = (run_states[i] or {}).get("merged_header") or {}
+                r = {**r, "車番": vehicle_plate_display(mh.get("車両番号"))}
+        out.append(r)
+    return out
+
+
 @app.get("/api/jobs/{jobId}")
 def get_job(jobId: str):
     sp = job_state_path(jobId)
@@ -685,10 +698,10 @@ def get_job(jobId: str):
                 out["linkGroups"] = data["linkGroups"]
         if state.status == "codriver_link_required":
             out["alcoholOnlyCrew"] = data.get("alcoholOnlyCrew") or []
-            out["driverRows"] = data.get("driverRows") or []
+            out["driverRows"] = _enrich_driver_rows_with_plate(data.get("driverRows") or [], data.get("run_states") or [])
             out["codriverLinks"] = data.get("codriverLinks") or []
         if state.status == "manual_input_required":
-            out["driverRows"] = data.get("driverRows") or []
+            out["driverRows"] = _enrich_driver_rows_with_plate(data.get("driverRows") or [], data.get("run_states") or [])
             out["alcoholRunsByCrew"] = data.get("alcoholRunsByCrew") or {}
     return out
 
