@@ -12,6 +12,13 @@
     <p id="err" class="err" style="display:none;"></p>
     <p style="color:#666;margin-bottom:20px;line-height:1.6;">処理する会社を選択してください。</p>
     <div id="companies" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;"></div>
+    <div style="margin-top:28px;background:#f6f8fb;border:1px solid #e4eaf3;border-radius:10px;padding:18px;">
+      <div style="font-size:13px;font-weight:700;color:#4b5563;margin-bottom:10px;">会社を追加する</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;">
+        <input type="text" id="newCompanyName" placeholder="会社名を入力" style="flex:1;min-width:200px;">
+        <button type="button" id="btnAddCompany" class="btn-secondary">追加</button>
+      </div>
+    </div>
   </div>
 
   <!-- 説明パネル（右サイドバー） -->
@@ -63,36 +70,64 @@
     );
     if (window.renderFlow) renderFlow("prep");
 
-    apiGet("/api/companies")
-      .then(function (data) {
-        companiesEl.innerHTML = "";
-        (data.companies || []).forEach(function (name) {
-          var a = document.createElement("a");
-          a.textContent = name;
-          a.style.display = "block";
-          a.style.padding = "20px";
-          a.style.border = "1px solid #d4dae3";
-          a.style.background = "#fff";
-          a.style.borderRadius = "10px";
-          a.style.textDecoration = "none";
-          a.style.color = "#1d4ed8";
-          a.style.fontWeight = "700";
-          a.style.fontSize = "16px";
-          a.style.textAlign = "center";
-          a.style.cursor = "pointer";
-          a.style.boxShadow = "0 1px 4px rgba(25, 40, 70, 0.06)";
-          a.href = "device.html?company=" + encodeURIComponent(name);
-          companiesEl.appendChild(a);
+    function loadCompanies() {
+      apiGet("/api/companies")
+        .then(function (data) {
+          companiesEl.innerHTML = "";
+          (data.companies || []).forEach(function (name) {
+            var a = document.createElement("a");
+            a.textContent = name;
+            a.style.display = "block";
+            a.style.padding = "20px";
+            a.style.border = "1px solid #d4dae3";
+            a.style.background = "#fff";
+            a.style.borderRadius = "10px";
+            a.style.textDecoration = "none";
+            a.style.color = "#1d4ed8";
+            a.style.fontWeight = "700";
+            a.style.fontSize = "16px";
+            a.style.textAlign = "center";
+            a.style.cursor = "pointer";
+            a.style.boxShadow = "0 1px 4px rgba(25, 40, 70, 0.06)";
+            a.href = "device.html?company=" + encodeURIComponent(name);
+            companiesEl.appendChild(a);
+          });
+          if (!(data.companies || []).length) {
+            companiesEl.innerHTML = '<p style="color:#666;">会社が登録されていません。下の「会社を追加する」から登録してください。</p>';
+          }
+        })
+        .catch(function (e) {
+          var errMsg = String(e);
+          showErr(errMsg);
+          updateGuide("エラー", errMsg, []);
         });
-        if (!(data.companies || []).length) {
-          companiesEl.innerHTML = '<p style="color:#666;">会社が登録されていません。</p>';
-        }
-      })
-      .catch(function (e) {
-        var errMsg = String(e);
-        showErr(errMsg);
-        updateGuide("エラー", errMsg, []);
-      });
+    }
+    loadCompanies();
+
+    document.getElementById("btnAddCompany").addEventListener("click", function () {
+      var input = document.getElementById("newCompanyName");
+      var name = (input.value || "").trim();
+      if (!name) {
+        showErr("会社名を入力してください。");
+        return;
+      }
+      showErr("");
+      var btn = document.getElementById("btnAddCompany");
+      btn.disabled = true;
+      btn.textContent = "追加中...";
+      apiPostJson("/api/companies", { name: name })
+        .then(function () {
+          input.value = "";
+          loadCompanies();
+        })
+        .catch(function (e) {
+          showErr(String(e));
+        })
+        .then(function () {
+          btn.disabled = false;
+          btn.textContent = "追加";
+        });
+    });
   </script>
 </body>
 </html>

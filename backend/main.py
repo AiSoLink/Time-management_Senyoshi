@@ -534,14 +534,13 @@ def create_company(payload: dict):
     company_dir = COMPANIES_DIR / name
     company_dir.mkdir(parents=True, exist_ok=True)
 
-    sample = COMPANIES_DIR / "__SAMPLE_COMPANY__"
     for dev in ("mimamori", "telecom"):
         target = company_dir / f"{dev}.json"
         if not target.exists():
-            if (sample / f"{dev}.json").exists():
-                shutil.copy(sample / f"{dev}.json", target)
-            else:
-                target.write_text('{"meta":{"device_type":"%s","version":"1.0"},"header_extract":{}}' % dev, encoding="utf-8")
+            target.write_text(
+                '{"meta":{"device_type":"%s","version":"1.0"},"header_extract":{},"task_names":{"荷積":[],"荷卸":[],"作業時間のみ":["積卸"]}}' % dev,
+                encoding="utf-8",
+            )
     return {"name": name, "created": True}
 
 @app.get("/api/companies/{company}/devices")

@@ -10,8 +10,10 @@
     <h1>時間管理システム</h1>
     <h2>前準備：機種を選択</h2>
     <p id="err" class="err" style="display:none;"></p>
+    <p style="color:#666;margin-bottom:8px;line-height:1.6;">会社：<b id="companyLabel"></b></p>
     <p style="color:#666;margin-bottom:20px;line-height:1.6;">使用しているデジタコの機種を選択してください。</p>
     <div id="devices" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:16px;"></div>
+    <p class="back-home"><a href="index.html">← 会社選択に戻る</a></p>
   </div>
 
   <!-- 説明パネル（右サイドバー） -->
@@ -28,6 +30,7 @@
     /* 会社は会社選択画面（index.html）から引き継ぐ。直接開かれた場合は選択画面へ戻す */
     var COMPANY = new URLSearchParams(location.search).get("company") || "";
     if (!COMPANY) location.href = "index.html";
+    document.getElementById("companyLabel").textContent = COMPANY || "—";
 
     var errEl = document.getElementById("err");
     var devicesEl = document.getElementById("devices");
