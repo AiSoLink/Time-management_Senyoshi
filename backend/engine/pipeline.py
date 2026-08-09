@@ -184,6 +184,35 @@ def _split_day_night_minutes(start: datetime, end: datetime) -> Tuple[int, int]:
     return day, night
 
 
+def _split_break_windows(start: datetime, end: datetime) -> Tuple[int, int, int]:
+    """
+    休憩を3区分へ1分単位で分割する（Excel側の分割休息判定用）。
+    - 昼: [05:00, 22:00)
+    - 22-24: [22:00, 24:00)  … 22:00 ちょうどはこちらに含む
+    - 0-5: [00:00, 05:00)    … 0:00 ちょうどはこちらに含み、5:00 は含めない
+    終了時刻ちょうどの分は計上しない（半開区間）。
+    _split_day_night_minutes と同じ1分歩きなので、昼は同関数の Day、
+    22-24 + 0-5 は同関数の Night と必ず一致する。
+    """
+    if end <= start:
+        return 0, 0, 0
+
+    day = 0
+    b2224 = 0
+    b0005 = 0
+    cur = start
+    while cur < end:
+        t = cur.time()
+        if time(5, 0) <= t < time(22, 0):
+            day += 1
+        elif t >= time(22, 0):
+            b2224 += 1
+        else:
+            b0005 += 1
+        cur = cur + timedelta(minutes=1)
+    return day, b2224, b0005
+
+
 def _apply_regex(text: str, pattern: str, group: int = 1) -> Optional[str]:
     m = re.search(pattern, text, re.MULTILINE)
     return m.group(group).strip() if m else None
@@ -253,6 +282,8 @@ def _is_time_serial_col(header_name: str) -> bool:
         "休憩時間_分割前",
         "休憩時間_昼_分割前",
         "休憩時間_夜_分割前",
+        "休憩時間_22-24_分割前",
+        "休憩時間_0-5_分割前",
         "休憩時間_分割後",
         "休憩時間_昼_分割後",
         "休憩時間_夜_分割後",
@@ -734,10 +765,21 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
     selected_set = {(b["start"], b["end"]) for b in selected}
 
     break_total = break_day = break_night = 0
+    break_2224 = break_0005 = 0
     rest_total = rest_day = rest_night = 0
     rest_splits: List[Dict[str, Any]] = []
 
     for b in breaks:
+        # 休憩終了が開始以前の区間は不正としてログし、計上しない
+        if b["end"] <= b["start"]:
+            try:
+                _get_rest_compare_logger().error(
+                    "BREAK_INVALID_RANGE run_id=%s 乗務員ID=%s 運行日=%s 休憩開始=%s 休憩終了=%s 終了が開始以前のため計上しません",
+                    header.get("運行ID"), header.get("乗務員ID"), header.get("運行日"), b["start"], b["end"],
+                )
+            except Exception:
+                pass
+            continue
         d, n = _split_day_night_minutes(b["start"], b["end"])
         if (b["start"], b["end"]) in selected_set:
             rest_total += b["dur"]
@@ -745,9 +787,13 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
             rest_night += n
             rest_splits.append(b)
         else:
+            # 休憩のみ 22-24 / 0-5 の2区分へさらに分割（休息は含めない）
+            _, w2224, w0005 = _split_break_windows(b["start"], b["end"])
             break_total += b["dur"]
             break_day += d
             break_night += n
+            break_2224 += w2224
+            break_0005 += w0005
 
     rest_splits = sorted(rest_splits, key=lambda x: (-x["dur"], x["start"]))[:2]
 
@@ -778,12 +824,32 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
 
         "休憩時間_分割前": int(break_total),
         "休憩時間_昼_分割前": int(break_day),
-        "休憩時間_夜_分割前": int(break_night),
+        # 互換用: 夜休憩は 22-24 と 0-5 の合計として維持する
+        "休憩時間_夜_分割前": int(break_2224 + break_0005),
+        "休憩時間_22-24_分割前": int(break_2224),
+        "休憩時間_0-5_分割前": int(break_0005),
 
         "休息時間": int(rest_total),
         "休息時間_昼": int(rest_day),
         "休息時間_夜": int(rest_night),
     }
+
+    # 検算: 夜=2区分合計 / 合計=昼+22-24+0-5 / 非負 / 休憩<=拘束
+    try:
+        _ident = {"運行ID": header.get("運行ID"), "乗務員ID": header.get("乗務員ID"), "運行日": header.get("運行日")}
+        if break_night != break_2224 + break_0005:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_NIGHT_MISMATCH %s 夜=%s 22-24=%s 0-5=%s", _ident, break_night, break_2224, break_0005)
+        if break_total != break_day + break_2224 + break_0005:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_TOTAL_MISMATCH %s 合計=%s 昼=%s 22-24=%s 0-5=%s", _ident, break_total, break_day, break_2224, break_0005)
+        if min(break_total, break_day, break_2224, break_0005) < 0:
+            _get_rest_compare_logger().error("BREAK_CHECK_NEGATIVE %s", _ident)
+        if break_total > bind_min:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_EXCEEDS_BIND %s 休憩=%s 拘束=%s 出庫=%s 帰庫=%s", _ident, break_total, bind_min, out_dt, in_dt)
+    except Exception:
+        pass
 
     try:
         _get_rest_compare_logger().info(
@@ -1399,6 +1465,7 @@ _MERGE_SUM_COLUMNS = [
     "労働時間_分割後", "労働時間_昼_分割後", "労働時間_夜_分割後",
     "運転時間", "待機時間", "荷積時間", "荷卸時間", "作業時間",
     "休憩時間_分割前", "休憩時間_昼_分割前", "休憩時間_夜_分割前",
+    "休憩時間_22-24_分割前", "休憩時間_0-5_分割前",
     "休憩時間_分割後", "休憩時間_昼_分割後", "休憩時間_夜_分割後",
     "休息時間", "休息時間_昼", "休息時間_夜",
     "ランキング",
@@ -1585,6 +1652,13 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
     # - 3時間未満: 休憩時間_分割前 に直接加算する
     extra_gap_break_day = 0
     extra_gap_break_night = 0
+    extra_gap_break_2224 = 0
+    extra_gap_break_0005 = 0
+
+    def _to_dt_any(v: Any) -> Optional[datetime]:
+        if isinstance(v, datetime):
+            return v
+        return _row_to_dt(v)
 
     for g in gap_segments:
         if g["dur"] >= REST_THRESHOLD_MINUTES:
@@ -1601,6 +1675,14 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         else:
             extra_gap_break_day += g["day_min"]
             extra_gap_break_night += g["night_min"]
+            _gs, _ge = _to_dt_any(g["start"]), _to_dt_any(g["end"])
+            if _gs is not None and _ge is not None:
+                _, _w22, _w05 = _split_break_windows(_gs, _ge)
+                extra_gap_break_2224 += _w22
+                extra_gap_break_0005 += _w05
+            else:
+                # 日時が解釈できない場合は夜合計との整合を優先し 22-24 側へ寄せる
+                extra_gap_break_2224 += g["night_min"]
 
     # 上位2つを分割①・②に
     candidates.sort(key=lambda x: x["dur"], reverse=True)
@@ -1626,12 +1708,22 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
     # 分割から外れた区間 + 3時間未満の運行間時間 は休憩時間_分割前に加算
     fallen = candidates[2:]
     extra_keikai_pre_day, extra_keikai_pre_night = 0, 0
+    extra_keikai_pre_2224, extra_keikai_pre_0005 = 0, 0
     for c in fallen:
         extra_keikai_pre_day += c["day_min"]
         extra_keikai_pre_night += c["night_min"]
+        _cs, _ce = _to_dt_any(c.get("start_dt") or c.get("start")), _to_dt_any(c.get("end_dt") or c.get("end"))
+        if _cs is not None and _ce is not None:
+            _, _w22, _w05 = _split_break_windows(_cs, _ce)
+            extra_keikai_pre_2224 += _w22
+            extra_keikai_pre_0005 += _w05
+        else:
+            extra_keikai_pre_2224 += c["night_min"]
 
     extra_keikai_pre_day += extra_gap_break_day
     extra_keikai_pre_night += extra_gap_break_night
+    extra_keikai_pre_2224 += extra_gap_break_2224
+    extra_keikai_pre_0005 += extra_gap_break_0005
 
     merged_row["休憩時間_分割前"] = (
         num_val(merged_row, "休憩時間_分割前")
@@ -1646,6 +1738,29 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         num_val(merged_row, "休憩時間_夜_分割前")
         + extra_keikai_pre_night
     )
+    merged_row["休憩時間_22-24_分割前"] = (
+        num_val(merged_row, "休憩時間_22-24_分割前")
+        + extra_keikai_pre_2224
+    )
+    merged_row["休憩時間_0-5_分割前"] = (
+        num_val(merged_row, "休憩時間_0-5_分割前")
+        + extra_keikai_pre_0005
+    )
+    # 検算: 統合後も 夜 = 22-24 + 0-5 / 合計 = 昼 + 22-24 + 0-5 が成立すること
+    try:
+        _m_night = num_val(merged_row, "休憩時間_夜_分割前")
+        _m_2224 = num_val(merged_row, "休憩時間_22-24_分割前")
+        _m_0005 = num_val(merged_row, "休憩時間_0-5_分割前")
+        _m_total = num_val(merged_row, "休憩時間_分割前")
+        _m_day = num_val(merged_row, "休憩時間_昼_分割前")
+        if _m_night != _m_2224 + _m_0005 or _m_total != _m_day + _m_2224 + _m_0005:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_MERGE_MISMATCH run_id=%s 乗務員ID=%s 運行日=%s 合計=%s 昼=%s 夜=%s 22-24=%s 0-5=%s",
+                merged_row.get("運行ID"), merged_row.get("乗務員ID"), merged_row.get("運行日"),
+                _m_total, _m_day, _m_night, _m_2224, _m_0005,
+            )
+    except Exception:
+        pass
 
     # 統合時は拘束を「最初出庫～最後帰庫」にしたので、労働時間_分割前も 拘束－休憩 で再計算
     if len(rows) >= 2:
