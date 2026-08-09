@@ -5,12 +5,42 @@ const getApiBase = () =>
 
 export const API_BASE = getApiBase();
 
+type ApiErrorJson = {
+  detail?: unknown;
+  userSummary?: string;
+  message?: string;
+  errorId?: string;
+  exceptionType?: string;
+  path?: string;
+};
+
+/** API が返す JSON から、画面用の短文メッセージを組み立てる */
+function formatApiErrorMessage(j: ApiErrorJson): string {
+  const lines: string[] = [];
+  if (typeof j.userSummary === "string" && j.userSummary.trim()) {
+    lines.push(j.userSummary.trim());
+  } else if (typeof j.detail === "string" && j.detail.trim()) {
+    lines.push(j.detail.trim());
+  } else if (j.detail != null) {
+    lines.push(typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail));
+  }
+  if (typeof j.errorId === "string" && j.errorId) {
+    lines.push(`参照ID: ${j.errorId}`);
+  }
+  const hasFriendly = typeof j.userSummary === "string" && j.userSummary.trim();
+  if (!hasFriendly && typeof j.message === "string" && j.message.trim()) {
+    lines.push(`技術メッセージ: ${j.message.trim()}`);
+  }
+  return lines.filter(Boolean).join("\n");
+}
+
 async function handleResponse(res: Response): Promise<never> {
   const text = await res.text();
   let msg = text;
   try {
-    const j = JSON.parse(text) as { detail?: string };
-    if (typeof j?.detail === "string") msg = j.detail;
+    const j = JSON.parse(text) as ApiErrorJson;
+    const formatted = formatApiErrorMessage(j);
+    if (formatted) msg = formatted;
   } catch {
     /* use text as-is */
   }
