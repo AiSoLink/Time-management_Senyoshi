@@ -577,9 +577,15 @@
         html += '<div style="font-size:12px;font-weight:700;color:#4b5563;background:#f6f8fb;padding:8px 14px;border-bottom:1px solid #e4eaf3;">日報の作業明細（出庫日からの時刻順）</div>';
         html += '<div style="max-height:180px;overflow-y:auto;">';
         html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+        var prevDate = "";
         dts.forEach(function (d, di) {
           var tm = (d.到着 || "") + (d.出発 ? (d.到着 ? " - " : "") + d.出発 : "");
-          html += '<tr style="background:' + (di % 2 === 0 ? '#fff' : '#fafbfd') + ';"><td style="padding:5px 14px;color:#666;white-space:nowrap;width:120px;">' + (tm || "—") + '</td><td style="padding:5px 14px;color:#3b4350;">' + (d.作業 || "—") + '</td></tr>';
+          var dateLabel = (d.日付 && d.日付 !== prevDate) ? d.日付 : "";
+          if (d.日付) prevDate = d.日付;
+          html += '<tr style="background:' + (di % 2 === 0 ? '#fff' : '#fafbfd') + ';">'
+            + '<td style="padding:5px 8px 5px 14px;color:#1d4ed8;font-weight:700;white-space:nowrap;width:52px;">' + dateLabel + '</td>'
+            + '<td style="padding:5px 8px;color:#666;white-space:nowrap;width:110px;">' + (tm || "—") + '</td>'
+            + '<td style="padding:5px 14px;color:#3b4350;">' + (d.作業 || "—") + '</td></tr>';
         });
         html += '</table></div></div>';
       }

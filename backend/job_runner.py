@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -71,11 +72,31 @@ def _detect_long_runs(run_states: List[Dict[str, Any]], input_dir: Path) -> List
             "alcoholEvents": [
                 {"種別": k, "日時": t.strftime("%Y/%m/%d %H:%M")} for k, t in in_period
             ],
-            "details": [
-                {"作業": d.get("task") or "", "到着": d.get("arrival") or "", "出発": d.get("depart") or ""}
-                for d in (rs.get("merged_details") or [])
-            ],
+            "details": _details_with_dates(rs.get("merged_details") or [], t_out),
         })
+    return out
+
+
+def _details_with_dates(details: List[Dict[str, Any]], t_out) -> List[Dict[str, Any]]:
+    """作業明細（時刻は HH:MM のみ）に、出庫日から日跨ぎを追跡して日付（MM/DD）を付ける。"""
+    out: List[Dict[str, Any]] = []
+    prev = None
+    day_offset = 0
+    for d in details:
+        tm = str(d.get("arrival") or d.get("depart") or "").strip()
+        date_str = ""
+        m = re.match(r"^(\d{1,2}):(\d{2})$", tm)
+        if m and t_out is not None:
+            try:
+                cur = t_out.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0) + timedelta(days=day_offset)
+                if prev is not None and cur < prev:
+                    day_offset += 1
+                    cur = cur + timedelta(days=1)
+                prev = cur
+                date_str = cur.strftime("%m/%d")
+            except ValueError:
+                pass
+        out.append({"日付": date_str, "作業": d.get("task") or "", "到着": d.get("arrival") or "", "出発": d.get("depart") or ""})
     return out
 
 def run_job(job_id: str) -> None:
