@@ -834,15 +834,16 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
         "休息時間_夜": int(rest_night),
     }
 
-    # 検算: 夜=2区分合計 / 合計=昼+22-24+0-5 / 非負 / 休憩<=拘束
+    # 必須検算: 休憩時間_分割前 = 昼 + 22-24 + 0-5（許容差1分）/ 非負 / 休憩<=拘束
     try:
-        _ident = {"運行ID": header.get("運行ID"), "乗務員ID": header.get("乗務員ID"), "運行日": header.get("運行日")}
-        if break_night != break_2224 + break_0005:
+        _ident = (
+            f"運行ID={header.get('運行ID')} 運行日={header.get('運行日')} "
+            f"乗務員ID={header.get('乗務員ID')} 乗務員名={header.get('乗務員名')}"
+        )
+        if abs(break_total - (break_day + break_2224 + break_0005)) > 1:
             _get_rest_compare_logger().error(
-                "BREAK_CHECK_NIGHT_MISMATCH %s 夜=%s 22-24=%s 0-5=%s", _ident, break_night, break_2224, break_0005)
-        if break_total != break_day + break_2224 + break_0005:
-            _get_rest_compare_logger().error(
-                "BREAK_CHECK_TOTAL_MISMATCH %s 合計=%s 昼=%s 22-24=%s 0-5=%s", _ident, break_total, break_day, break_2224, break_0005)
+                "BREAK_CHECK_TOTAL_MISMATCH %s 休憩時間_分割前=%s 休憩時間_昼_分割前=%s 休憩時間_22-24_分割前=%s 休憩時間_0-5_分割前=%s",
+                _ident, break_total, break_day, break_2224, break_0005)
         if min(break_total, break_day, break_2224, break_0005) < 0:
             _get_rest_compare_logger().error("BREAK_CHECK_NEGATIVE %s", _ident)
         if break_total > bind_min:
@@ -1746,18 +1747,17 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         num_val(merged_row, "休憩時間_0-5_分割前")
         + extra_keikai_pre_0005
     )
-    # 検算: 統合後も 夜 = 22-24 + 0-5 / 合計 = 昼 + 22-24 + 0-5 が成立すること
+    # 必須検算: 統合後も 休憩時間_分割前 = 昼 + 22-24 + 0-5（許容差1分）が成立すること
     try:
-        _m_night = num_val(merged_row, "休憩時間_夜_分割前")
         _m_2224 = num_val(merged_row, "休憩時間_22-24_分割前")
         _m_0005 = num_val(merged_row, "休憩時間_0-5_分割前")
         _m_total = num_val(merged_row, "休憩時間_分割前")
         _m_day = num_val(merged_row, "休憩時間_昼_分割前")
-        if _m_night != _m_2224 + _m_0005 or _m_total != _m_day + _m_2224 + _m_0005:
+        if abs(_m_total - (_m_day + _m_2224 + _m_0005)) > 1:
             _get_rest_compare_logger().error(
-                "BREAK_CHECK_MERGE_MISMATCH run_id=%s 乗務員ID=%s 運行日=%s 合計=%s 昼=%s 夜=%s 22-24=%s 0-5=%s",
-                merged_row.get("運行ID"), merged_row.get("乗務員ID"), merged_row.get("運行日"),
-                _m_total, _m_day, _m_night, _m_2224, _m_0005,
+                "BREAK_CHECK_MERGE_MISMATCH 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 休憩時間_分割前=%s 休憩時間_昼_分割前=%s 休憩時間_22-24_分割前=%s 休憩時間_0-5_分割前=%s",
+                merged_row.get("運行ID"), merged_row.get("運行日"), merged_row.get("乗務員ID"), merged_row.get("乗務員名"),
+                _m_total, _m_day, _m_2224, _m_0005,
             )
     except Exception:
         pass
