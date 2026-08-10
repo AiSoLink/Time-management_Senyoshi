@@ -28,12 +28,16 @@ def _cell_value(ws: Worksheet, row: int, col: int) -> Any:
     return ws.cell(row=row, column=col).value
 
 
+# 2026/08/25 のアルキラーNEXアップデートで「日時」→「検知日時」に変更されるため両方受け付ける
+DT_HEADER_NAMES = ("日時", "検知日時")
+
+
 def _find_header_row(ws: Worksheet, max_rows: int = 50) -> Optional[int]:
-    want = {"ID", "氏名", "日時", "出帰庫"}
+    want = {"ID", "氏名", "出帰庫"}
     for r in range(1, min(max_rows, ws.max_row + 1) + 1):
         row_vals = [_cell_value(ws, r, c) for c in range(1, 30)]
         cells_norm = {_normalize_header(str(v) if v is not None else "") for v in (row_vals[:20] if row_vals else [])}
-        if want <= cells_norm:
+        if want <= cells_norm and any(h in cells_norm for h in DT_HEADER_NAMES):
             return r
     return None
 
@@ -118,7 +122,11 @@ def load_taimen_sheet(ws: Worksheet) -> List[Tuple[Any, Any, Any, str]]:
 
     col_id = _col_index_by_name(ws, header_row, "ID")
     col_name = _col_index_by_name(ws, header_row, "氏名")
-    col_dt = _col_index_by_name(ws, header_row, "日時")
+    col_dt = None
+    for _h in DT_HEADER_NAMES:
+        col_dt = _col_index_by_name(ws, header_row, _h)
+        if col_dt:
+            break
     col_type = _col_index_by_name(ws, header_row, "出帰庫")
     if not all([col_id, col_name, col_dt, col_type]):
         return []
@@ -158,15 +166,23 @@ def _col_index_by_name_csv(header_row: List[str], name: str) -> Optional[int]:
 
 
 def load_taimen_csv(path: Path) -> List[Tuple[Any, Any, Any, str]]:
-    """対面CSVから (ID, 氏名, 日時, 種別) のリスト。列名で取得。"""
+    """対面CSVから (ID, 氏名, 日時, 種別) のリスト。列名で取得。日時列は「日時」「検知日時」両対応。"""
     rows = _read_csv_rows(path)
-    hi = _find_header_row_csv(rows, ["ID", "氏名", "日時", "出帰庫"])
+    hi = None
+    for dt_name in DT_HEADER_NAMES:
+        hi = _find_header_row_csv(rows, ["ID", "氏名", dt_name, "出帰庫"])
+        if hi is not None:
+            break
     if hi is None:
         return []
     header = rows[hi]
     col_id = _col_index_by_name_csv(header, "ID")
     col_name = _col_index_by_name_csv(header, "氏名")
-    col_dt = _col_index_by_name_csv(header, "日時")
+    col_dt = None
+    for dt_name in DT_HEADER_NAMES:
+        col_dt = _col_index_by_name_csv(header, dt_name)
+        if col_dt is not None:
+            break
     col_type = _col_index_by_name_csv(header, "出帰庫")
     if col_id is None or col_name is None or col_dt is None or col_type is None:
         return []
@@ -213,15 +229,30 @@ def load_taimen_events(taimen_dir: Path) -> List[Tuple[Any, Any, Any, str]]:
     return events
 
 
+def _enkaku_dt_indices_from_header(header_cells: List[Any]) -> Tuple[int, int]:
+    """遠隔のヘッダー行から日時列（「日時」または「検知日時」）の位置を解決する。
+    複数グループ（出庫・中間・帰庫）のうち最初を出庫、最後を帰庫として扱う。
+    見つからない場合は従来の固定位置（4, 25）へフォールバック。"""
+    idxs = [
+        i for i, c in enumerate(header_cells)
+        if _normalize_header(str(c) if c is not None else "") in DT_HEADER_NAMES
+    ]
+    if len(idxs) >= 2:
+        return idxs[0], idxs[-1]
+    return ENKAKU_COL_INDEX["departure"], ENKAKU_COL_INDEX["return_"]
+
+
 def load_enkaku_sheet(ws: Worksheet) -> List[Tuple[Any, Any, Any, Any]]:
     """遠隔シートから (社員コード, 社員名, 出庫日時, 帰庫日時) のリスト。"""
+    header_cells = [_cell_value(ws, 1, c) for c in range(1, 40)]
+    dep_idx, ret_idx = _enkaku_dt_indices_from_header(header_cells)
     data_start = 2
     rows: List[Tuple[Any, Any, Any, Any]] = []
     for r in range(data_start, ws.max_row + 1):
         staff_code = _cell_value(ws, r, ENKAKU_COL_INDEX["staff_code"] + 1)
         staff_name = _cell_value(ws, r, ENKAKU_COL_INDEX["staff_name"] + 1)
-        departure = _cell_value(ws, r, ENKAKU_COL_INDEX["departure"] + 1)
-        return_ = _cell_value(ws, r, ENKAKU_COL_INDEX["return_"] + 1)
+        departure = _cell_value(ws, r, dep_idx + 1)
+        return_ = _cell_value(ws, r, ret_idx + 1)
         if staff_code is None and staff_name is None:
             continue
         rows.append((staff_code, staff_name, departure, return_))
@@ -229,21 +260,83 @@ def load_enkaku_sheet(ws: Worksheet) -> List[Tuple[Any, Any, Any, Any]]:
 
 
 def load_enkaku_csv(path: Path) -> List[Tuple[Any, Any, Any, Any]]:
-    """遠隔CSVから (社員コード, 社員名, 出庫日時, 帰庫日時) のリスト。列番号で取得: 0,1,4,25。"""
+    """遠隔CSVから (社員コード, 社員名, 出庫日時, 帰庫日時) のリスト。
+    日時列はヘッダー名（日時/検知日時）から解決し、不明時は従来の固定位置（4, 25）。"""
     rows = _read_csv_rows(path)
     if len(rows) < 2:
         return []
-    # 1行目をヘッダー、2行目以降をデータとする
+    dep_idx, ret_idx = _enkaku_dt_indices_from_header(rows[0])
     out: List[Tuple[Any, Any, Any, Any]] = []
     for row in rows[1:]:
         nc = len(row)
         staff_code = row[ENKAKU_COL_INDEX["staff_code"]] if nc > 0 else None
         staff_name = row[ENKAKU_COL_INDEX["staff_name"]] if nc > 1 else None
-        departure = row[ENKAKU_COL_INDEX["departure"]] if nc > ENKAKU_COL_INDEX["departure"] else None
-        return_ = row[ENKAKU_COL_INDEX["return_"]] if nc > ENKAKU_COL_INDEX["return_"] else None
+        departure = row[dep_idx] if nc > dep_idx else None
+        return_ = row[ret_idx] if nc > ret_idx else None
         if not staff_code and not staff_name:
             continue
         out.append((staff_code or None, staff_name or None, departure or None, return_ or None))
+    return out
+
+
+def _normalize_plate(v: Any) -> str:
+    """車両番号の比較用正規化（全角半角統一・空白除去）。"""
+    import unicodedata
+    s = unicodedata.normalize("NFKC", str(v or "")).replace(" ", "").replace("　", "")
+    return s
+
+
+def enkaku_vehicles_by_crew(alcohol_dir: Path) -> Dict[str, set]:
+    """遠隔（アルキラー）から、乗務員ID正規化 → 検査時に記録された車両番号の集合を返す。
+    車両列は各日時列（日時/検知日時）の直後の列とする。日報ダウンロード漏れ検知用。"""
+    out: Dict[str, set] = {}
+    if not alcohol_dir.exists():
+        return out
+
+    def _collect(header_cells: List[Any], get_cell) -> None:
+        dt_idxs = [
+            i for i, c in enumerate(header_cells)
+            if _normalize_header(str(c) if c is not None else "") in DT_HEADER_NAMES
+        ]
+        if not dt_idxs:
+            dt_idxs = [ENKAKU_COL_INDEX["departure"], ENKAKU_COL_INDEX["return_"]]
+        veh_idxs = [i + 1 for i in dt_idxs]
+        for row_vals in get_cell:
+            code = row_vals[ENKAKU_COL_INDEX["staff_code"]] if len(row_vals) > 0 else None
+            norm = _normalize_crew_id(code)
+            if not norm:
+                continue
+            for vi in veh_idxs:
+                if vi < len(row_vals):
+                    plate = _normalize_plate(row_vals[vi])
+                    if plate:
+                        out.setdefault(norm, set()).add(plate)
+
+    for path in sorted(alcohol_dir.iterdir()):
+        if path.name.startswith("~") or not path.is_file():
+            continue
+        suf = path.suffix.lower()
+        is_csv = suf == ".csv" or (suf == "" and path.name.lower().endswith("csv"))
+        if suf == ".xlsx":
+            try:
+                wb = load_workbook(path, read_only=False, data_only=True)
+                for sheet in wb.worksheets:
+                    header = [_cell_value(sheet, 1, c) for c in range(1, 40)]
+                    data = [
+                        [_cell_value(sheet, r, c) for c in range(1, 40)]
+                        for r in range(2, sheet.max_row + 1)
+                    ]
+                    _collect(header, data)
+                wb.close()
+            except Exception:
+                continue
+        elif is_csv:
+            try:
+                rows = _read_csv_rows(path)
+                if len(rows) >= 2:
+                    _collect(rows[0], rows[1:])
+            except Exception:
+                continue
     return out
 
 

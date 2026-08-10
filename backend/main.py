@@ -721,6 +721,7 @@ def get_job(jobId: str):
         data = json.loads(manual_path.read_text(encoding="utf-8"))
         if state.status == "roster_check_required":
             out["rosterMissing"] = data.get("rosterMissing") or []
+            out["vehicleMissing"] = data.get("vehicleMissing") or []
         if state.status == "long_run_check_required":
             out["longRuns"] = data.get("longRuns") or []
         if state.status == "merge_decision_required":

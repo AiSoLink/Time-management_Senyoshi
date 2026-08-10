@@ -440,7 +440,7 @@
       return;
     }
 
-    if (job.status === "roster_check_required" && job.rosterMissing && job.rosterMissing.length > 0) {
+    if (job.status === "roster_check_required" && ((job.rosterMissing || []).length > 0 || (job.vehicleMissing || []).length > 0)) {
       renderRosterCheck();
       return;
     }
@@ -546,16 +546,33 @@
 
   function renderRosterCheck() {
     var missing = job.rosterMissing || [];
-    var html = '<div style="background:#fff8e1;border:1px solid #ffe0b2;border-radius:10px;padding:18px;margin-bottom:24px;">';
-    html += '<p style="margin:0;color:#7a4f01;line-height:1.8;font-size:14px;"><strong>これまでの名簿にいる以下の乗務員の日報が、今回ありませんでした。</strong><br>退職・休み・運行なしであれば問題ありません。<br>日報の入れ忘れの場合は、この画面から追加できます。</p></div>';
-    html += '<div style="background:white;border:1px solid #ddd;border-radius:10px;padding:18px;margin-bottom:20px;">';
-    html += '<div style="font-size:13px;font-weight:700;color:#4b5563;margin-bottom:10px;">日報が無かった乗務員（' + missing.length + '名）</div>';
-    missing.forEach(function (m, mi) {
-      html += '<div style="display:flex;align-items:center;gap:12px;padding:8px 12px;background:' + (mi % 2 === 0 ? '#fafbfd' : '#fff') + ';border-radius:6px;font-size:14px;">'
-        + '<span style="font-weight:600;">' + (m.乗務員名 || "—") + '</span>'
-        + '<span style="color:#999;font-size:12px;">' + (m.乗務員ID || "—") + '</span></div>';
-    });
-    html += '</div>';
+    var vehicleMissing = job.vehicleMissing || [];
+    var html = '';
+    /* 日報のダウンロード漏れの疑い（検査車両の日報が1件も無い＝初回から検知できる） */
+    if (vehicleMissing.length > 0) {
+      html += '<div style="background:#fdecea;border:2px solid #d32f2f;border-radius:10px;padding:18px;margin-bottom:20px;">';
+      html += '<div style="font-weight:700;color:#b71c1c;font-size:15px;margin-bottom:8px;">【日報のダウンロード漏れの疑い】</div>';
+      html += '<p style="margin:0 0 12px 0;color:#b71c1c;font-size:13px;line-height:1.8;">以下の乗務員は、<strong>アルコール検査をした車両の日報が1件もありません</strong>。<br>本人が運転しているのに車両ごと日報から抜けている可能性があります。<br>日報をダウンロードした際の<strong>会社選択・出力範囲</strong>を確認してください。</p>';
+      vehicleMissing.forEach(function (m, mi) {
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:8px 12px;background:#fff;border:1px solid #ef9a9a;border-radius:6px;margin-bottom:6px;font-size:13px;">'
+          + '<span style="font-weight:600;">' + (m.乗務員名 || "—") + '</span>'
+          + '<span style="color:#999;font-size:12px;">' + (m.乗務員ID || "—") + '</span>'
+          + '<span style="color:#3b4350;font-size:12px;">検査車両：' + ((m.車両 || []).join("、") || "—") + '</span></div>';
+      });
+      html += '</div>';
+    }
+    if (missing.length > 0) {
+      html += '<div style="background:#fff8e1;border:1px solid #ffe0b2;border-radius:10px;padding:18px;margin-bottom:24px;">';
+      html += '<p style="margin:0;color:#7a4f01;line-height:1.8;font-size:14px;"><strong>これまでの名簿にいる以下の乗務員の日報が、今回ありませんでした。</strong><br>退職・休み・運行なしであれば問題ありません。<br>日報の入れ忘れの場合は、この画面から追加できます。</p></div>';
+      html += '<div style="background:white;border:1px solid #ddd;border-radius:10px;padding:18px;margin-bottom:20px;">';
+      html += '<div style="font-size:13px;font-weight:700;color:#4b5563;margin-bottom:10px;">日報が無かった乗務員（' + missing.length + '名）</div>';
+      missing.forEach(function (m, mi) {
+        html += '<div style="display:flex;align-items:center;gap:12px;padding:8px 12px;background:' + (mi % 2 === 0 ? '#fafbfd' : '#fff') + ';border-radius:6px;font-size:14px;">'
+          + '<span style="font-weight:600;">' + (m.乗務員名 || "—") + '</span>'
+          + '<span style="color:#999;font-size:12px;">' + (m.乗務員ID || "—") + '</span></div>';
+      });
+      html += '</div>';
+    }
     var dis = submitting ? " disabled" : "";
     html += '<div style="font-size:14px;font-weight:700;color:#1a1d23;margin:0 0 10px 0;">この人たちの日報が無くて大丈夫ですか？</div>';
     html += '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:20px;">';
@@ -570,10 +587,11 @@
     document.getElementById("content").innerHTML = html;
 
     updateGuide(
-      "前準備：名簿の確認",
-      "前回までに登場した乗務員のうち\n今回の日報に無い人を\nお知らせしています。",
+      "前準備：日報の確認",
+      "日報が見つからない乗務員を\nお知らせしています。",
       [
-        "運行なし・休みなら\n「大丈夫」で次へ",
+        "赤い警告は、検査した車両の\n日報が丸ごと無い状態です。\nダウンロード時の会社選択・\n出力範囲を確認してください",
+        "運行なし・休み・退職なら\n「大丈夫」で次へ",
         "入れ忘れなら日報PDFを\n選択して追加",
         "追加すると全体を\n再処理します"
       ]

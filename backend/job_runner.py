@@ -9,7 +9,14 @@ from typing import Any, Dict, List
 from storage.paths import job_input_dir, job_output_dir, job_state_path, COMPANIES_DIR
 from storage.state import Artifacts, save_state, iso_now, load_state
 from engine.pipeline import run_pipeline, vehicle_plate_display
-from engine.alcohol_integration import integrate_alcohol, write_integrated_excel, _normalize_crew_id, _to_datetime
+from engine.alcohol_integration import (
+    integrate_alcohol,
+    write_integrated_excel,
+    _normalize_crew_id,
+    _to_datetime,
+    enkaku_vehicles_by_crew,
+    _normalize_plate,
+)
 
 # 出庫〜帰庫がこの時間以上の運行は「帰庫の押し忘れ」の疑いとして確認画面に回す
 LONG_RUN_HOURS = 24
@@ -61,6 +68,56 @@ def _update_roster_and_find_missing(company: str, run_states: List[Dict[str, Any
     except Exception:
         pass
     return missing
+
+
+def _detect_missing_nippo_by_vehicle(run_states: List[Dict[str, Any]], input_dir: Path) -> List[Dict[str, Any]]:
+    """日報のダウンロード漏れの疑いを検知する。
+    「アルコール検査に記録された車両の日報が1件も無い乗務員」を返す。
+    横乗りの人は同乗した車両を別の乗務員が運転していて日報が存在するため、ここには出ない。
+    車両記録の無い検査（対面のみ等）は判定不能なので対象外（安全側）。"""
+    digitaco_ids = set()
+    nippo_plates = set()
+    for rs in run_states or []:
+        mh = rs.get("merged_header") or {}
+        norm = _normalize_crew_id(mh.get("乗務員ID"))
+        if norm:
+            digitaco_ids.add(norm)
+        plate = _normalize_plate(mh.get("車両番号"))
+        if plate:
+            nippo_plates.add(plate)
+    try:
+        veh_by_crew = enkaku_vehicles_by_crew(input_dir / "alcohol")
+    except Exception:
+        return []
+    if not veh_by_crew:
+        return []
+    # 乗務員ID → 表示用の (ID, 名前)
+    try:
+        events = integrate_alcohol(input_dir / "taimen", input_dir / "alcohol")
+    except Exception:
+        events = []
+    crew_first: Dict[str, Any] = {}
+    for e in events:
+        norm = _normalize_crew_id(e[0])
+        if norm and norm not in crew_first:
+            crew_first[norm] = (e[0], e[1])
+    out: List[Dict[str, Any]] = []
+    for norm, plates in veh_by_crew.items():
+        if not norm or norm in digitaco_ids:
+            continue
+        plates = {p for p in plates if p}
+        if not plates:
+            continue
+        if plates & nippo_plates:
+            continue  # 検査車両の日報が存在 → 横乗りの可能性が高いので警告しない
+        uid, name = crew_first.get(norm, (norm, None))
+        out.append({
+            "乗務員ID": uid,
+            "乗務員名": name,
+            "車両": sorted(plates),
+        })
+    out.sort(key=lambda m: str(m.get("乗務員ID") or ""))
+    return out
 
 
 def _detect_long_runs(run_states: List[Dict[str, Any]], input_dir: Path) -> List[Dict[str, Any]]:
@@ -215,6 +272,8 @@ def run_job(job_id: str) -> None:
         if getattr(result, "merge_decision_required", False) and result.run_states is not None and result.merge_groups is not None:
             # 名簿を更新し、名簿にいるのに今回の日報にいない乗務員を検出（初回は名簿が無いのでスキップ）
             roster_missing = _update_roster_and_find_missing(state.company, result.run_states)
+            # 日報のダウンロード漏れの疑い（検査車両の日報が1件も無い乗務員）を検出（初回から有効）
+            vehicle_missing = _detect_missing_nippo_by_vehicle(result.run_states, input_dir)
             # 帰庫の押し忘れが疑われる長時間運行があれば、先に確認画面（ステップ0）へ回す
             long_runs = _detect_long_runs(result.run_states, input_dir)
             next_status = "long_run_check_required" if long_runs else "merge_decision_required"
@@ -225,9 +284,10 @@ def run_job(job_id: str) -> None:
             }
             if long_runs:
                 manual_data["longRuns"] = long_runs
-            if roster_missing:
+            if roster_missing or vehicle_missing:
                 # 名簿チェックを最優先で表示（日報の追加＝再処理があり得るため）
                 manual_data["rosterMissing"] = roster_missing
+                manual_data["vehicleMissing"] = vehicle_missing
                 manual_data["nextStatus"] = next_status
                 state.status = "roster_check_required"
             else:
