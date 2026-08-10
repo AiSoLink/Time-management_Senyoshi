@@ -706,6 +706,81 @@ def _enrich_driver_rows_with_plate(driver_rows: List[Dict[str, Any]], run_states
     return out
 
 
+def _suggest_codriver_runs(alcohol_only_crew: List[Dict[str, Any]], driver_rows: List[Dict[str, Any]]) -> None:
+    """横乗り候補（アルコールのみの乗務員）の各運行に、同乗した可能性の高い運行の
+    推定候補 suggestions を付与する（in place）。判定は2段階:
+    1. 時刻の近さ: アルコール検査の出庫・帰庫と日報運行の出庫・帰庫が ±90分以内
+       （両方一致 > 片方のみ）
+    2. 一貫性: 期間を通じて同じ相手と繰り返し一致する場合はその相手を優先
+       （毎日同じ車に同乗するケースを正しく上位に出すため）"""
+    WINDOW = 90 * 60  # 秒
+
+    drv = []
+    for dr in driver_rows:
+        if dr.get("rowIndex") is None:
+            continue
+        drv.append({
+            "rowIndex": dr.get("rowIndex"),
+            "乗務員名": dr.get("乗務員名"),
+            "車番": dr.get("車番"),
+            "out": _row_to_dt(dr.get("出庫日時")),
+            "in": _row_to_dt(dr.get("帰庫日時")),
+        })
+
+    for c in alcohol_only_crew or []:
+        runs = c.get("runs") or []
+
+        # --- 1段階目: 各運行ごとの時刻一致候補 ---
+        per_run_cands: List[List[Dict[str, Any]]] = []
+        for run in runs:
+            a_out = _row_to_dt(run.get("出庫日時"))
+            a_in = _row_to_dt(run.get("帰庫日時"))
+            cands: List[Dict[str, Any]] = []
+            for r in drv:
+                out_diff = abs((r["out"] - a_out).total_seconds()) if (a_out and r["out"]) else None
+                in_diff = abs((r["in"] - a_in).total_seconds()) if (a_in and r["in"]) else None
+                out_ok = out_diff is not None and out_diff <= WINDOW
+                in_ok = in_diff is not None and in_diff <= WINDOW
+                if not out_ok and not in_ok:
+                    continue
+                both = out_ok and in_ok
+                cands.append({
+                    "driverRowIndex": r["rowIndex"],
+                    "乗務員名": r["乗務員名"],
+                    "車番": r["車番"],
+                    "both": both,
+                    "_time": (out_diff or 0) + (in_diff or 0),
+                    "_side": "出庫・帰庫が一致" if both else ("出庫が一致" if out_ok else "帰庫が一致"),
+                })
+            per_run_cands.append(cands)
+
+        # --- 2段階目: 同じ相手が何運行分一致したか（この乗務員の期間全体で集計） ---
+        person_hits: Dict[str, int] = {}
+        for cands in per_run_cands:
+            seen: set = set()
+            for s in cands:
+                p = str(s.get("乗務員名") or "").strip()
+                if not p or p in seen:
+                    continue
+                seen.add(p)
+                person_hits[p] = person_hits.get(p, 0) + 1
+
+        # --- 最終スコア: 両方一致 > 一貫性（一致運行数） > 時刻の近さ ---
+        for run, cands in zip(runs, per_run_cands):
+            for s in cands:
+                hits = person_hits.get(str(s.get("乗務員名") or "").strip(), 1)
+                s["hits"] = hits
+                reason = s.pop("_side")
+                if hits >= 2:
+                    reason += f"・他の{hits - 1}運行とも一致"
+                s["reason"] = reason
+            cands.sort(key=lambda s: (not s["both"], -s["hits"], s["_time"]))
+            run["suggestions"] = [
+                {k: v for k, v in s.items() if not k.startswith("_")}
+                for s in cands[:3]
+            ]
+
+
 @app.get("/api/jobs/{jobId}")
 def get_job(jobId: str):
     sp = job_state_path(jobId)
@@ -757,8 +832,11 @@ def get_job(jobId: str):
             if data.get("linkGroups") is not None:
                 out["linkGroups"] = data["linkGroups"]
         if state.status == "codriver_link_required":
-            out["alcoholOnlyCrew"] = data.get("alcoholOnlyCrew") or []
-            out["driverRows"] = _enrich_driver_rows_with_plate(data.get("driverRows") or [], data.get("run_states") or [])
+            _crew = data.get("alcoholOnlyCrew") or []
+            _drv = _enrich_driver_rows_with_plate(data.get("driverRows") or [], data.get("run_states") or [])
+            _suggest_codriver_runs(_crew, _drv)
+            out["alcoholOnlyCrew"] = _crew
+            out["driverRows"] = _drv
             out["codriverLinks"] = data.get("codriverLinks") or []
         if state.status == "manual_input_required":
             out["driverRows"] = _enrich_driver_rows_with_plate(data.get("driverRows") or [], data.get("run_states") or [])

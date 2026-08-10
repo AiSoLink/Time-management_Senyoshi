@@ -1445,7 +1445,18 @@
             var nameAttr = (d.乗務員名 || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
             html += '<div class="codriver-opt" data-key="' + keyEsc + '" data-row-index="' + d.rowIndex + '" data-driver-name="' + nameAttr + '" data-driver-bg="' + optDriverBg + '">' + lab.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</div>';
           });
-          html += "</div></div></div>";
+          html += "</div></div>";
+          /* おすすめ候補（アルコールの時刻が一致する運行）。未選択のときだけ表示 */
+          if ((sel === undefined || sel === null) && (run.suggestions || []).length > 0) {
+            html += '<div style="margin-top:6px;">';
+            html += '<div style="font-size:11px;color:#2e7d32;font-weight:700;margin-bottom:4px;">おすすめ（時刻が一致）</div>';
+            run.suggestions.forEach(function (s) {
+              var slabel = (s.乗務員名 || "—") + " / " + (s.車番 || "—") + "（" + (s.reason || "") + "）";
+              html += '<button type="button" class="codriver-suggest" data-key="' + keyEsc + '" data-row-index="' + s.driverRowIndex + '" style="display:block;width:100%;text-align:left;margin-bottom:4px;padding:6px 10px;border:1px solid ' + (s.both ? "#bbf7d0" : "#e0e0e0") + ';background:' + (s.both ? "#f0fdf4" : "#fafbfd") + ';border-radius:6px;cursor:pointer;font-size:12px;color:#1a1d23;">' + slabel.replace(/</g, "&lt;").replace(/>/g, "&gt;") + '</button>';
+            });
+            html += '</div>';
+          }
+          html += "</div>";
           if (sel !== undefined && sel !== null) {
             html += '<button type="button" class="codriver-clear" data-key="' + keyEsc + '" title="選択をはずす" aria-label="選択をはずす">×</button>';
           }
@@ -1469,6 +1480,8 @@
       [
         "別の乗務員の運行に同乗した",
         "場合に該当します",
+        "緑の「おすすめ」は検査時刻が",
+        "一致する運行です（クリックで選択）",
         "同乗運行を選択したら「次へ」"
       ]
     );
@@ -1494,6 +1507,15 @@
     if (!window._codriverOptDelegationAttached) {
       window._codriverOptDelegationAttached = true;
       document.getElementById("content").addEventListener("click", function (e) {
+        var suggest = e.target.closest(".codriver-suggest");
+        if (suggest) {
+          e.stopPropagation();
+          var sk = suggest.getAttribute("data-key");
+          var sri = suggest.getAttribute("data-row-index");
+          codriverSelections[sk] = (sri === "" || sri == null) ? undefined : parseInt(sri, 10);
+          render();
+          return;
+        }
         var opt = e.target.closest(".codriver-opt");
         if (!opt) return;
         e.stopPropagation();
