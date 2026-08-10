@@ -419,11 +419,23 @@
     if (window.renderFlow) renderFlow(flowKey);
 
     if (job.status === "queued" || job.status === "running") {
-      contentEl.innerHTML = "<p>⏳ 処理中...</p>";
+      var pPct = job.progressPercent != null && job.progressPercent > 0 ? Math.round(job.progressPercent) : 0;
+      var pRemain = "";
+      if (job.startedAt && pPct >= 3 && pPct < 100) {
+        var pElapsed = (Date.now() - new Date(job.startedAt).getTime()) / 1000;
+        if (pElapsed > 0) {
+          var pRemainSec = pElapsed * (100 - pPct) / pPct;
+          pRemain = pRemainSec < 60 ? "（推定残り 1分未満）" : "（推定残り 約" + Math.ceil(pRemainSec / 60) + "分）";
+        }
+      }
+      contentEl.innerHTML = '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:24px;">'
+        + '<p style="margin:0 0 16px 0;font-weight:600;color:#1a1a1a;">処理中… ' + pPct + '% ' + pRemain + '</p>'
+        + '<div class="progress-bar"><div class="progress-bar-inner" style="width:' + pPct + '%;"></div></div>'
+        + '<p style="margin-top:12px;font-size:13px;color:#666;">' + (job.progressLabel || "データを分析しています") + '</p></div>';
       updateGuide(
-        "処理中",
-        "データを分析しています。\nしばらくお待ちください...",
-        []
+        "処理中 (" + pPct + "%)",
+        "データを分析しています。\nしばらくお待ちください..." + (pRemain ? "\n\n" + pRemain : ""),
+        job.progressLabel ? [job.progressLabel] : []
       );
       return;
     }

@@ -30,6 +30,8 @@ class JobState:
     finishedAt: Optional[str] = None
     artifacts: Artifacts = field(default_factory=Artifacts)
     pendingRows: Optional[List[Dict[str, Any]]] = None  # 出庫・帰庫が未取得の行（手入力用）
+    progressPercent: float = 0.0  # 処理の進捗（0〜100）
+    progressLabel: str = ""       # いま何をしているかの表示用ラベル
 
 def load_state(path: Path) -> JobState:
     # 書き込み直後の読み取りで空/途中のファイルを掴む競合があり得るため、

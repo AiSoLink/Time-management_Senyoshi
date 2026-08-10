@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json
 import re
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, Dict, List
@@ -166,6 +167,8 @@ def run_job(job_id: str) -> None:
 
     state.status = "running"
     state.startedAt = iso_now()
+    state.progressPercent = 0.0
+    state.progressLabel = "処理を開始しています"
     save_state(state_path, state)
 
     try:
@@ -175,6 +178,23 @@ def run_job(job_id: str) -> None:
 
         preset = COMPANIES_DIR / state.company / f"{state.device}.json"
 
+        # 進捗を state.json に書き込む（読み取り側の負荷を抑えるため約1秒間隔に間引く）
+        _last_progress = {"t": 0.0, "p": -1.0}
+
+        def _on_progress(frac: float, label: str) -> None:
+            now = time.monotonic()
+            pct = round(frac * 100, 1)
+            if (now - _last_progress["t"]) < 1.0 and abs(pct - _last_progress["p"]) < 5.0:
+                return
+            _last_progress["t"] = now
+            _last_progress["p"] = pct
+            state.progressPercent = pct
+            state.progressLabel = label
+            try:
+                save_state(state_path, state)
+            except Exception:
+                pass
+
         result = run_pipeline(
             company=state.company,
             device=state.device,
@@ -182,7 +202,10 @@ def run_job(job_id: str) -> None:
             pdf_paths=pdfs,
             job_output_dir=out_dir,
             job_input_dir=input_dir,
+            progress_cb=_on_progress,
         )
+        state.progressPercent = 100.0
+        state.progressLabel = ""
 
         state.totalPdfs = len(pdfs)
         state.processedPdfs = len(pdfs)

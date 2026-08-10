@@ -346,11 +346,17 @@ def _minutes_to_excel_time_serial(minutes: Optional[int]) -> Optional[float]:
 # PDF read
 # =========================
 
-def _read_pdf_text(pdf_path: Path) -> Tuple[str, str]:
+def _read_pdf_text(pdf_path: Path, page_cb=None) -> Tuple[str, str]:
     texts: List[str] = []
     with pdfplumber.open(str(pdf_path)) as pdf:
-        for p in pdf.pages:
+        total_pages = len(pdf.pages)
+        for pi, p in enumerate(pdf.pages, start=1):
             texts.append(p.extract_text() or "")
+            if page_cb is not None:
+                try:
+                    page_cb(pi, total_pages)
+                except Exception:
+                    pass
     raw = "\n".join(texts)
     cleaned = _clean_for_regex(raw)
     return raw, cleaned
@@ -2124,8 +2130,17 @@ def run_pipeline(
     pdf_paths: List[Path],
     job_output_dir: Path,
     job_input_dir: Optional[Path] = None,  # アルコール突合用（taimen / alcohol サブディレクトリ）
+    progress_cb=None,       # 進捗通知: progress_cb(0.0〜1.0, ラベル文字列)
 ) -> PipelineResult:
     from storage.paths import EXCEL_HEADERS_JSON_PATH
+
+    def _notify(frac: float, label: str) -> None:
+        if progress_cb is None:
+            return
+        try:
+            progress_cb(max(0.0, min(1.0, frac)), label)
+        except Exception:
+            pass
     _headers_path = EXCEL_HEADERS_JSON_PATH if EXCEL_HEADERS_JSON_PATH is not None else (Path(__file__).parent / "excel_headers.json")
     headers: List[str] = json.loads(_headers_path.read_text(encoding="utf-8"))
     preset = _load_preset(preset_path)
@@ -2147,7 +2162,8 @@ def run_pipeline(
     groups: Dict[str, List[Dict[str, Any]]] = {}  # report_id -> list of parts
     unknown_idx = 0
 
-    for p in pdf_paths:
+    _n_pdfs = max(1, len(pdf_paths))
+    for _pdf_i, p in enumerate(pdf_paths):
         ctx_base = {
             "timestamp": _now_iso(),
             "company": company,
@@ -2162,7 +2178,11 @@ def run_pipeline(
         }
 
         try:
-            raw, _ = _read_pdf_text(p)
+            # PDF読み取り（全体の約85%を占める重い処理）をページ単位で進捗通知する
+            def _page_cb(page: int, total_pages: int, _i=_pdf_i, _name=p.name):
+                frac = (_i + (page / max(1, total_pages)) * 0.95) / _n_pdfs * 0.85
+                _notify(frac, f"PDFを読み取り中（{_name}：{page}/{total_pages}ページ）")
+            raw, _ = _read_pdf_text(p, page_cb=_page_cb)
             he = preset.get("header_extract") or {}
             report_id_regex = he.get("report_id_regex") or r"ID-\d+"
             run_blocks = _split_raw_by_runs(raw, report_id_regex)
@@ -2212,7 +2232,10 @@ def run_pipeline(
     run_states: List[Dict[str, Any]] = []  # 手入力完了時に再計算する用（alcohol 使用時のみ蓄積）
 
     # ---- 2) グループごとに結合して 1運行=1行 を作る ----
-    for report_id, parts in groups.items():
+    _notify(0.86, "運行データを集計中")
+    _n_groups = max(1, len(groups))
+    for _grp_i, (report_id, parts) in enumerate(groups.items()):
+        _notify(0.86 + (_grp_i / _n_groups) * 0.10, f"運行データを集計中（{_grp_i + 1}/{_n_groups}運行）")
         ctx = {
             "timestamp": _now_iso(),
             "company": company,
@@ -2297,6 +2320,7 @@ def run_pipeline(
 
     _write_log(log_path, logs)
     _write_skipped(skipped_path, skipped)
+    _notify(0.97, "アルコールデータと突合中")
 
     # ②をアルコール突合より前に: 3h未満グループがあればここで質問に回し、アルコールはまだかけない
     if run_states and rows:

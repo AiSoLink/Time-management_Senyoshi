@@ -285,17 +285,31 @@
       document.getElementById("confirmSection").style.display = "none";
     });
 
+    /* 推定残り時間: サーバーの進捗％と開始時刻から計算する */
+    function estimateRemaining(j, pct) {
+      if (!j.startedAt || pct < 3 || pct >= 100) return "";
+      var elapsedSec = (Date.now() - new Date(j.startedAt).getTime()) / 1000;
+      if (!(elapsedSec > 0)) return "";
+      var remainSec = elapsedSec * (100 - pct) / pct;
+      if (remainSec < 60) return "（推定残り 1分未満）";
+      return "（推定残り 約" + Math.ceil(remainSec / 60) + "分）";
+    }
+
     function poll() {
       if (!jobId) return;
       apiGet("/api/jobs/" + jobId).then(function (j) {
-        var pct = j.totalPdfs ? Math.round((100 * j.processedPdfs) / j.totalPdfs) : 0;
+        var pct = j.progressPercent != null && j.progressPercent > 0
+          ? Math.round(j.progressPercent)
+          : (j.totalPdfs ? Math.round((100 * j.processedPdfs) / j.totalPdfs) : 0);
+        var remain = estimateRemaining(j, pct);
         document.getElementById("progressBar").style.width = pct + "%";
-        document.getElementById("progressDetail").textContent = j.processedPdfs + " / " + j.totalPdfs + " PDF 処理済み";
+        document.getElementById("progressText").textContent = "処理中… " + pct + "% " + remain;
+        document.getElementById("progressDetail").textContent = j.progressLabel || (j.processedPdfs + " / " + j.totalPdfs + " PDF 処理済み");
         updateGuide(
           "前準備：処理中... (" + pct + "%)",
-          "PDFファイルを分析しています。\n電源を切らずにお待ちください。",
+          "PDFファイルを分析しています。\n電源を切らずにお待ちください。" + (remain ? "\n\n" + remain : ""),
           [
-            "処理中：" + j.processedPdfs + " / " + j.totalPdfs + " ファイル"
+            j.progressLabel || ("処理中：" + j.processedPdfs + " / " + j.totalPdfs + " ファイル")
           ]
         );
         if (j.status === "queued" || j.status === "running") {
