@@ -1326,6 +1326,26 @@ def rows_from_run_states(
 
 
 def _write_excel(headers: List[str], rows: List[Dict[str, Any]], out_path: Path) -> None:
+    # 検算: 運行IDの一意性（Excel側は運行IDをキーに全行を処理するため重複は不可）
+    try:
+        _seen_ids: Dict[str, int] = {}
+        for r in rows:
+            rid = str(r.get("運行ID") or "").strip()
+            if not rid:
+                continue
+            _seen_ids[rid] = _seen_ids.get(rid, 0) + 1
+        for rid, cnt in _seen_ids.items():
+            if cnt > 1:
+                _dups = [r for r in rows if str(r.get("運行ID") or "").strip() == rid]
+                for r in _dups:
+                    _get_rest_compare_logger().error(
+                        "RUN_ID_DUPLICATE 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 出庫日時=%s 帰庫日時=%s 理由=同一運行IDが%s行あります",
+                        rid, r.get("運行日"), r.get("乗務員ID"), r.get("乗務員名"),
+                        r.get("出庫日時"), r.get("帰庫日時"), cnt,
+                    )
+    except Exception:
+        pass
+
     wb = Workbook()
     ws = wb.active
     ws.title = "出力"
