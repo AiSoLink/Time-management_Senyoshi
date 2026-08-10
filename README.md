@@ -10,6 +10,7 @@
 - **「どんな仕組みで動いてるか知りたい」** → [どういうロジックで動いているか](#-どういうロジックで動いているか) を読んでください（非エンジニア・初心者向け）。
 - **「中身をいじって開発したい」** → [開発の始め方](#-開発の始め方) と [フォルダの役割](#-フォルダの役割) を読んでください。
 - **「exeにして配布したい」** → [exe化の手順](#-exe化して配布する) を参照してください。
+- **「後段Excelの休日・週40時間・同日複数運行を確認したい」** → [`docs/07_後段Excelマクロ要件定義_休日週40時間.md`](docs/07_後段Excelマクロ要件定義_休日週40時間.md) を参照してください。
 
 ---
 
@@ -307,6 +308,7 @@ Remove-Item -Recurse -Force .\dist, .\build -ErrorAction SilentlyContinue
   - `GET /api/jobs/{jobId}/download/excel`（Excel取得）
 - **ジョブの状態遷移**: `queued → running → roster_check_required?（名簿）→ long_run_check_required?（長時間運行）→ merge_decision_required → link_decision_required → codriver_link_required → manual_input_required → succeeded`（`?` は該当時のみ）
 - **Excel出力**: 全55列（A〜BC）。列定義は `backend/engine/excel_headers.json`。休憩は「暦日別（出庫日/翌日）」と「時間帯別（昼/22-24/0-5）」の両方に分割して出力し、検算（許容差1分）を `rest_compare.log` に記録。
+- **後段Excelマクロ**: `運行日`は帳票日として扱い、`運行ID`単位で全行を保持したうえで暦日別に休日・週40時間を計算する。詳細は [`docs/07_後段Excelマクロ要件定義_休日週40時間.md`](docs/07_後段Excelマクロ要件定義_休日週40時間.md)。
 - **乗務員名簿**: `backend/companies/{会社}/roster.json` に実行のたび自動蓄積（Git管理外）。
 
 ---
