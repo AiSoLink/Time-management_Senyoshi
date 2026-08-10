@@ -34,6 +34,7 @@ from engine.pipeline import (
     _get_rest_compare_logger,
     vehicle_plate_display,
     _detect_merge_groups,
+    _is_over_two_calendar_days,
 )
 from engine.alcohol_integration import integrate_alcohol, alcohol_runs_by_crew, alcohol_only_crew_list, _normalize_crew_id as normalize_crew_id
 from uuid import uuid4
@@ -868,6 +869,13 @@ def complete_long_run_check(jobId: str, body: Dict[str, Any] = Body(...)):
         rs = run_states[i]
         mh = rs.get("merged_header") or {}
         mr = rs.get("merged_row") or {}
+        # 出庫日・翌日を超えた運行は「このまま」では確定できない（時間管理Excelの対応範囲外）
+        if action == "keep" and _is_over_two_calendar_days(_row_to_dt(mh.get("出庫日時")), _row_to_dt(mh.get("帰庫日時"))):
+            raise HTTPException(
+                status_code=400,
+                detail=f"【運行期間エラー】出庫日・翌日を超えた運行（運行ID: {mh.get('運行ID')} / {mh.get('乗務員名')}）は"
+                       "このまま確定できません。分割または帰庫修正で2暦日以内に収めるか、システム担当者に連絡してください。",
+            )
         if action == "fix":
             new_in = str(d.get("帰庫日時") or "").strip()
             if not new_in:
@@ -922,6 +930,19 @@ def complete_long_run_check(jobId: str, body: Dict[str, Any] = Body(...)):
                 mh2["走行状態_分"] = int(drive_min) - mh["走行状態_分"]
             run_states.insert(i + 1, rs2)
         # action == "keep" は何もしない
+
+    # 確定前の最終検査: 出庫日・翌日を超える運行が残っていたら確定させない（Excel連携データの確定・DL停止）
+    still_over = []
+    for rs in run_states:
+        mh = rs.get("merged_header") or {}
+        if _is_over_two_calendar_days(_row_to_dt(mh.get("出庫日時")), _row_to_dt(mh.get("帰庫日時"))):
+            still_over.append(f"{mh.get('運行ID')}（{mh.get('乗務員名')} {mh.get('出庫日時')}〜{mh.get('帰庫日時')}）")
+    if still_over:
+        raise HTTPException(
+            status_code=400,
+            detail="【運行期間エラー】出庫日・翌日を超えた運行が残っています: " + " / ".join(still_over)
+                   + "。分割または帰庫修正で2暦日以内に収めてください。",
+        )
 
     # 修正後の運行で3時間未満グループを再検出し、通常フロー（まとめ画面）へ進める
     preset_path = COMPANIES_DIR / state.company / f"{state.device}.json"

@@ -637,13 +637,32 @@
     });
     var html = '<div style="background:#fff8e1;border:1px solid #ffe0b2;border-radius:10px;padding:18px;margin-bottom:24px;">';
     html += '<p style="margin:0;color:#7a4f01;line-height:1.8;font-size:14px;"><strong>出庫から帰庫まで24時間以上の運行が見つかりました。</strong><br>帰庫ボタンの押し忘れで、実際より長い運行として記録されている可能性があります。<br>アルコール検査の記録から修正候補を用意したので、各運行の扱いを選んでください。</p></div>';
+    /* 出庫日・翌日を超えた運行（時間管理Excelの対応範囲外）は最上部に警告一覧を表示 */
+    var overRuns = runs.filter(function (r) { return r.エラー種別 === "運行期間超過"; });
+    if (overRuns.length > 0) {
+      html += '<div style="background:#fdecea;border:2px solid #d32f2f;border-radius:10px;padding:18px;margin-bottom:24px;">';
+      html += '<div style="font-weight:700;color:#b71c1c;font-size:15px;margin-bottom:8px;">【運行期間エラー】</div>';
+      html += '<p style="margin:0 0 12px 0;color:#b71c1c;font-size:13px;line-height:1.8;">出庫日・翌日を超えた運行を検出しました。この運行は時間管理Excelの対応範囲外です。<br><strong>このまま確定することはできません。</strong>分割または帰庫修正で2暦日以内に収めるか、処理を続行する場合はシステム担当者に連絡してください。</p>';
+      overRuns.forEach(function (r) {
+        html += '<div style="background:#fff;border:1px solid #ef9a9a;border-radius:6px;padding:10px 12px;margin-bottom:6px;font-size:12px;color:#3b4350;">'
+          + '運行ID：' + (r.運行ID || "—") + '　乗務員ID：' + (r.乗務員ID || "—") + '　乗務員名：' + (r.乗務員名 || "—")
+          + '<br>出庫日時：' + (r.出庫日時 || "—") + '　帰庫日時：' + (r.帰庫日時 || "—") + '</div>';
+      });
+      html += '</div>';
+    }
     runs.forEach(function (r) {
       var dec = longRunDecisions[r.rowIndex];
       html += '<div style="background:white;border:1px solid #ddd;border-radius:10px;padding:18px;margin-bottom:16px;">';
+      var isOver = r.エラー種別 === "運行期間超過";
+      /* 対応範囲外の運行は「このまま」を選ばせない（Q1を強制的に「はい」へ） */
+      if (isOver && dec.forgot !== true) dec.forgot = true;
       html += '<div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px;">'
         + '<span style="font-weight:700;font-size:15px;">' + (r.乗務員名 || "—") + '</span>'
         + '<span style="color:#666;font-size:13px;">' + (r.車番 || "—") + '</span>'
-        + '<span style="background:#fdecea;color:#c62828;font-weight:700;font-size:12px;border-radius:999px;padding:2px 10px;">拘束 ' + (r.拘束時間h || "—") + ' 時間</span></div>';
+        + '<span style="background:#fdecea;color:#c62828;font-weight:700;font-size:12px;border-radius:999px;padding:2px 10px;">拘束 ' + (r.拘束時間h || "—") + ' 時間</span>'
+        + (isOver ? '<span style="background:#b71c1c;color:#fff;font-weight:700;font-size:12px;border-radius:999px;padding:2px 10px;">対応範囲外（3暦日）</span>' : '')
+        + (r.エラー種別 === "帰庫が出庫以前" ? '<span style="background:#b71c1c;color:#fff;font-weight:700;font-size:12px;border-radius:999px;padding:2px 10px;">帰庫が出庫より前</span>' : '')
+        + '</div>';
       html += '<div style="color:#666;font-size:13px;margin-bottom:14px;">出庫 ' + (r.出庫日時 || "—") + ' 〜 帰庫 ' + (r.帰庫日時 || "—") + '</div>';
       /* この期間のアルコール検査の記録（前後2時間を含む） */
       html += '<div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:12px 14px;margin-bottom:12px;">';
@@ -690,12 +709,16 @@
           + '<span style="margin:0 4px;">:</span>'
           + '<input type="text" inputmode="numeric" class="' + cls + '" data-row="' + r.rowIndex + '" data-field="' + fieldPrefix + '分" placeholder="MM" maxlength="2" value="' + (m || "").replace(/"/g, "&quot;") + '" style="width:44px;padding:6px;border:1px solid #ddd;border-radius:6px;text-align:center;font-size:13px;"></div>';
       }
-      /* Q1: 切り忘れかどうか */
-      html += '<div style="font-size:14px;font-weight:700;color:#1a1d23;margin:16px 0 8px 0;">Q1. デジタコ（帰庫ボタン）の切り忘れですか？</div>';
-      html += '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
-        + qBtn("forgot", "yes", "はい、切り忘れです", dec.forgot === true)
-        + qBtn("forgot", "no", "いいえ、本当にこの長さの運行でした", dec.forgot === false)
-        + '</div>';
+      /* Q1: 切り忘れかどうか（対応範囲外の運行は「いいえ」を出さず修正必須） */
+      if (isOver) {
+        html += '<div style="margin:16px 0 8px 0;padding:10px 14px;background:#fdecea;border:1px solid #ef9a9a;border-radius:8px;font-size:13px;color:#b71c1c;font-weight:600;">この運行は出庫日・翌日を超えているため、このまま確定できません。下のQ2で分割または帰庫修正をしてください。</div>';
+      } else {
+        html += '<div style="font-size:14px;font-weight:700;color:#1a1d23;margin:16px 0 8px 0;">Q1. デジタコ（帰庫ボタン）の切り忘れですか？</div>';
+        html += '<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+          + qBtn("forgot", "yes", "はい、切り忘れです", dec.forgot === true)
+          + qBtn("forgot", "no", "いいえ、本当にこの長さの運行でした", dec.forgot === false)
+          + '</div>';
+      }
       if (dec.forgot === false) {
         html += '<div style="margin-top:10px;padding:10px 14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:13px;color:#15803d;font-weight:600;">✓ このままの時間で処理します</div>';
       }

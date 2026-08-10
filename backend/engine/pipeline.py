@@ -213,6 +213,41 @@ def _split_break_windows(start: datetime, end: datetime) -> Tuple[int, int, int]
     return day, b2224, b0005
 
 
+def _split_break_by_date(start: datetime, end: datetime, base_date: datetime) -> Tuple[int, int, int]:
+    """
+    休憩を暦日で分割する（Excel側の休日労働・週40時間計算用）。
+    - 出庫日側: base_date（出庫日）の 00:00〜24:00 に重なった分
+    - 翌日側:   出庫日の翌日の 00:00〜24:00 に重なった分
+    - 範囲外:   それ以外（3暦日目以降や出庫日より前）に重なった分
+    按分は行わず、実時刻との重複から1分単位で計算する。
+    """
+    if end <= start:
+        return 0, 0, 0
+    day1_start = base_date.replace(hour=0, minute=0, second=0, microsecond=0)
+    day2_start = day1_start + timedelta(days=1)
+    day3_start = day1_start + timedelta(days=2)
+
+    def overlap_minutes(a_start: datetime, a_end: datetime) -> int:
+        s = max(start, a_start)
+        e = min(end, a_end)
+        if e <= s:
+            return 0
+        return int((e - s).total_seconds() // 60)
+
+    d1 = overlap_minutes(day1_start, day2_start)
+    d2 = overlap_minutes(day2_start, day3_start)
+    total = int((end - start).total_seconds() // 60)
+    out_of_range = max(0, total - d1 - d2)
+    return d1, d2, out_of_range
+
+
+def _is_over_two_calendar_days(out_dt: Optional[datetime], in_dt: Optional[datetime]) -> bool:
+    """帰庫日時の日付が出庫日時の日付+1日を超えている（=3暦日目に入った）場合 True。"""
+    if out_dt is None or in_dt is None:
+        return False
+    return in_dt.date() > out_dt.date() + timedelta(days=1)
+
+
 def _apply_regex(text: str, pattern: str, group: int = 1) -> Optional[str]:
     m = re.search(pattern, text, re.MULTILINE)
     return m.group(group).strip() if m else None
@@ -280,13 +315,19 @@ def _is_time_serial_col(header_name: str) -> bool:
         "荷卸時間",
         "作業時間",
         "休憩時間_分割前",
+        "休憩時間_出庫日_分割前",
+        "休憩時間_翌日_分割前",
         "休憩時間_昼_分割前",
         "休憩時間_夜_分割前",
         "休憩時間_22-24_分割前",
         "休憩時間_0-5_分割前",
         "休憩時間_分割後",
+        "休憩時間_出庫日_分割後",
+        "休憩時間_翌日_分割後",
         "休憩時間_昼_分割後",
         "休憩時間_夜_分割後",
+        "休憩時間_22-24_分割後",
+        "休憩時間_0-5_分割後",
         "休息時間",
         "休息時間_昼",
         "休息時間_夜",
@@ -766,6 +807,7 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
 
     break_total = break_day = break_night = 0
     break_2224 = break_0005 = 0
+    break_date1 = break_date2 = 0  # 出庫日側 / 翌日側（暦日分割）
     rest_total = rest_day = rest_night = 0
     rest_splits: List[Dict[str, Any]] = []
 
@@ -794,6 +836,20 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
             break_night += n
             break_2224 += w2224
             break_0005 += w0005
+            # 暦日分割（出庫日側 / 翌日側）。基準日は出庫日
+            if out_dt is not None:
+                d1, d2, oor = _split_break_by_date(b["start"], b["end"], out_dt)
+                break_date1 += d1
+                break_date2 += d2
+                if oor > 0:
+                    try:
+                        _get_rest_compare_logger().error(
+                            "BREAK_OUT_OF_RUN_DAYS 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 出庫日時=%s 帰庫日時=%s 休憩開始=%s 休憩終了=%s 範囲外分=%s 理由=休憩が出庫日・翌日の範囲外にあります",
+                            header.get("運行ID"), header.get("運行日"), header.get("乗務員ID"), header.get("乗務員名"),
+                            out_dt, in_dt, b["start"], b["end"], oor,
+                        )
+                    except Exception:
+                        pass
 
     rest_splits = sorted(rest_splits, key=lambda x: (-x["dur"], x["start"]))[:2]
 
@@ -823,8 +879,10 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
         "作業時間": int(work_total_min),
 
         "休憩時間_分割前": int(break_total),
+        "休憩時間_出庫日_分割前": int(break_date1),
+        "休憩時間_翌日_分割前": int(break_date2),
         "休憩時間_昼_分割前": int(break_day),
-        # 互換用: 夜休憩は 22-24 と 0-5 の合計として維持する
+        # 互換用: 夜休憩は 22-24 と 0-5 の合計として維持する（内部計算用・Excelには出力しない）
         "休憩時間_夜_分割前": int(break_2224 + break_0005),
         "休憩時間_22-24_分割前": int(break_2224),
         "休憩時間_0-5_分割前": int(break_0005),
@@ -834,21 +892,29 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
         "休息時間_夜": int(rest_night),
     }
 
-    # 必須検算: 休憩時間_分割前 = 昼 + 22-24 + 0-5（許容差1分）/ 非負 / 休憩<=拘束
+    # 必須検算（許容差1分）:
+    # ・時間帯別: 休憩時間_分割前 = 昼 + 22-24 + 0-5
+    # ・日付別:   休憩時間_分割前 = 出庫日 + 翌日
+    # ・非負 / 休憩<=拘束
     try:
         _ident = (
             f"運行ID={header.get('運行ID')} 運行日={header.get('運行日')} "
-            f"乗務員ID={header.get('乗務員ID')} 乗務員名={header.get('乗務員名')}"
+            f"乗務員ID={header.get('乗務員ID')} 乗務員名={header.get('乗務員名')} "
+            f"出庫日時={out_dt} 帰庫日時={in_dt}"
         )
         if abs(break_total - (break_day + break_2224 + break_0005)) > 1:
             _get_rest_compare_logger().error(
-                "BREAK_CHECK_TOTAL_MISMATCH %s 休憩時間_分割前=%s 休憩時間_昼_分割前=%s 休憩時間_22-24_分割前=%s 休憩時間_0-5_分割前=%s",
+                "BREAK_CHECK_TIMEBAND_MISMATCH %s 休憩時間_分割前=%s 休憩時間_昼_分割前=%s 休憩時間_22-24_分割前=%s 休憩時間_0-5_分割前=%s 理由=時間帯別合計が不一致",
                 _ident, break_total, break_day, break_2224, break_0005)
-        if min(break_total, break_day, break_2224, break_0005) < 0:
-            _get_rest_compare_logger().error("BREAK_CHECK_NEGATIVE %s", _ident)
+        if abs(break_total - (break_date1 + break_date2)) > 1:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_DATE_MISMATCH %s 休憩時間_分割前=%s 休憩時間_出庫日_分割前=%s 休憩時間_翌日_分割前=%s 理由=日付別合計が不一致",
+                _ident, break_total, break_date1, break_date2)
+        if min(break_total, break_day, break_2224, break_0005, break_date1, break_date2) < 0:
+            _get_rest_compare_logger().error("BREAK_CHECK_NEGATIVE %s 理由=負数の休憩時間", _ident)
         if break_total > bind_min:
             _get_rest_compare_logger().error(
-                "BREAK_CHECK_EXCEEDS_BIND %s 休憩=%s 拘束=%s 出庫=%s 帰庫=%s", _ident, break_total, bind_min, out_dt, in_dt)
+                "BREAK_CHECK_EXCEEDS_BIND %s 休憩=%s 拘束=%s 理由=休憩が拘束時間を超過", _ident, break_total, bind_min)
     except Exception:
         pass
 
@@ -1546,6 +1612,34 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
     for col in _MERGE_SUM_COLUMNS:
         merged_row[col] = sum(num_val(r, col) for r in rows)
 
+    # 暦日別休憩（出庫日/翌日）は「統合後の出庫日」を基準に再バケットして合算する。
+    # 各 source 行の値は自分の出庫日基準のため、統合出庫日との日差でずらす。
+    _merged_out_dt = min(out_dts) if out_dts else _row_to_dt(first.get("出庫日時"))
+    _d1_sum = 0
+    _d2_sum = 0
+    for r in rows:
+        r_out = _row_to_dt(r.get("出庫日時"))
+        shift = 0
+        if _merged_out_dt is not None and r_out is not None:
+            shift = (r_out.date() - _merged_out_dt.date()).days
+        for offset, v in ((shift, num_val(r, "休憩時間_出庫日_分割前")), (shift + 1, num_val(r, "休憩時間_翌日_分割前"))):
+            if v <= 0:
+                continue
+            if offset == 0:
+                _d1_sum += v
+            elif offset == 1:
+                _d2_sum += v
+            else:
+                try:
+                    _get_rest_compare_logger().error(
+                        "BREAK_DATE_MERGE_OUT_OF_RANGE 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 対象分=%s 理由=統合により出庫日・翌日の範囲外となる休憩が発生",
+                        merged_row.get("運行ID"), merged_row.get("運行日"), merged_row.get("乗務員ID"), merged_row.get("乗務員名"), v,
+                    )
+                except Exception:
+                    pass
+    merged_row["休憩時間_出庫日_分割前"] = _d1_sum
+    merged_row["休憩時間_翌日_分割前"] = _d2_sum
+
     # 運転時間: source run ごとに drive を解決してから合算（group total が 0 の時だけの救済は行わない）
     def _resolve_drive_min(row: Dict[str, Any], rs: Dict[str, Any]) -> int:
         v = row.get("運転時間")
@@ -1655,11 +1749,15 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
     extra_gap_break_night = 0
     extra_gap_break_2224 = 0
     extra_gap_break_0005 = 0
+    extra_gap_break_date1 = 0
+    extra_gap_break_date2 = 0
 
     def _to_dt_any(v: Any) -> Optional[datetime]:
         if isinstance(v, datetime):
             return v
         return _row_to_dt(v)
+
+    _merged_out_for_date = _to_dt_any(merged_row.get("出庫日時"))
 
     for g in gap_segments:
         if g["dur"] >= REST_THRESHOLD_MINUTES:
@@ -1681,9 +1779,14 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
                 _, _w22, _w05 = _split_break_windows(_gs, _ge)
                 extra_gap_break_2224 += _w22
                 extra_gap_break_0005 += _w05
+                if _merged_out_for_date is not None:
+                    _gd1, _gd2, _goor = _split_break_by_date(_gs, _ge, _merged_out_for_date)
+                    extra_gap_break_date1 += _gd1
+                    extra_gap_break_date2 += _gd2
             else:
                 # 日時が解釈できない場合は夜合計との整合を優先し 22-24 側へ寄せる
                 extra_gap_break_2224 += g["night_min"]
+                extra_gap_break_date1 += g["day_min"] + g["night_min"]
 
     # 上位2つを分割①・②に
     candidates.sort(key=lambda x: x["dur"], reverse=True)
@@ -1710,6 +1813,7 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
     fallen = candidates[2:]
     extra_keikai_pre_day, extra_keikai_pre_night = 0, 0
     extra_keikai_pre_2224, extra_keikai_pre_0005 = 0, 0
+    extra_keikai_pre_date1, extra_keikai_pre_date2 = 0, 0
     for c in fallen:
         extra_keikai_pre_day += c["day_min"]
         extra_keikai_pre_night += c["night_min"]
@@ -1718,13 +1822,20 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
             _, _w22, _w05 = _split_break_windows(_cs, _ce)
             extra_keikai_pre_2224 += _w22
             extra_keikai_pre_0005 += _w05
+            if _merged_out_for_date is not None:
+                _cd1, _cd2, _coor = _split_break_by_date(_cs, _ce, _merged_out_for_date)
+                extra_keikai_pre_date1 += _cd1
+                extra_keikai_pre_date2 += _cd2
         else:
             extra_keikai_pre_2224 += c["night_min"]
+            extra_keikai_pre_date1 += c["day_min"] + c["night_min"]
 
     extra_keikai_pre_day += extra_gap_break_day
     extra_keikai_pre_night += extra_gap_break_night
     extra_keikai_pre_2224 += extra_gap_break_2224
     extra_keikai_pre_0005 += extra_gap_break_0005
+    extra_keikai_pre_date1 += extra_gap_break_date1
+    extra_keikai_pre_date2 += extra_gap_break_date2
 
     merged_row["休憩時間_分割前"] = (
         num_val(merged_row, "休憩時間_分割前")
@@ -1747,17 +1858,35 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
         num_val(merged_row, "休憩時間_0-5_分割前")
         + extra_keikai_pre_0005
     )
-    # 必須検算: 統合後も 休憩時間_分割前 = 昼 + 22-24 + 0-5（許容差1分）が成立すること
+    merged_row["休憩時間_出庫日_分割前"] = (
+        num_val(merged_row, "休憩時間_出庫日_分割前")
+        + extra_keikai_pre_date1
+    )
+    merged_row["休憩時間_翌日_分割前"] = (
+        num_val(merged_row, "休憩時間_翌日_分割前")
+        + extra_keikai_pre_date2
+    )
+    # 必須検算（許容差1分）: 統合後も
+    # ・時間帯別: 休憩時間_分割前 = 昼 + 22-24 + 0-5
+    # ・日付別:   休憩時間_分割前 = 出庫日 + 翌日
     try:
         _m_2224 = num_val(merged_row, "休憩時間_22-24_分割前")
         _m_0005 = num_val(merged_row, "休憩時間_0-5_分割前")
         _m_total = num_val(merged_row, "休憩時間_分割前")
         _m_day = num_val(merged_row, "休憩時間_昼_分割前")
+        _m_d1 = num_val(merged_row, "休憩時間_出庫日_分割前")
+        _m_d2 = num_val(merged_row, "休憩時間_翌日_分割前")
         if abs(_m_total - (_m_day + _m_2224 + _m_0005)) > 1:
             _get_rest_compare_logger().error(
-                "BREAK_CHECK_MERGE_MISMATCH 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 休憩時間_分割前=%s 休憩時間_昼_分割前=%s 休憩時間_22-24_分割前=%s 休憩時間_0-5_分割前=%s",
+                "BREAK_CHECK_MERGE_TIMEBAND_MISMATCH 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 休憩時間_分割前=%s 休憩時間_昼_分割前=%s 休憩時間_22-24_分割前=%s 休憩時間_0-5_分割前=%s 理由=統合後の時間帯別合計が不一致",
                 merged_row.get("運行ID"), merged_row.get("運行日"), merged_row.get("乗務員ID"), merged_row.get("乗務員名"),
                 _m_total, _m_day, _m_2224, _m_0005,
+            )
+        if abs(_m_total - (_m_d1 + _m_d2)) > 1:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_MERGE_DATE_MISMATCH 運行ID=%s 運行日=%s 乗務員ID=%s 乗務員名=%s 休憩時間_分割前=%s 休憩時間_出庫日_分割前=%s 休憩時間_翌日_分割前=%s 理由=統合後の日付別合計が不一致",
+                merged_row.get("運行ID"), merged_row.get("運行日"), merged_row.get("乗務員ID"), merged_row.get("乗務員名"),
+                _m_total, _m_d1, _m_d2,
             )
     except Exception:
         pass

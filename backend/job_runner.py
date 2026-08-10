@@ -73,10 +73,27 @@ def _detect_long_runs(run_states: List[Dict[str, Any]], input_dir: Path) -> List
         mh = rs.get("merged_header") or {}
         t_out = _to_datetime(mh.get("出庫日時"))
         t_in = _to_datetime(mh.get("帰庫日時"))
+        ident = {
+            "rowIndex": i,
+            "運行ID": mh.get("運行ID"),
+            "乗務員ID": mh.get("乗務員ID"),
+            "乗務員名": mh.get("乗務員名"),
+            "車番": vehicle_plate_display(mh.get("車両番号")),
+            "出庫日時": mh.get("出庫日時"),
+            "帰庫日時": mh.get("帰庫日時"),
+        }
+        # 帰庫が出庫より前 → 異常として確認画面へ
+        if t_out and t_in and t_in <= t_out:
+            out.append({**ident, "拘束時間h": None, "エラー種別": "帰庫が出庫以前",
+                        "fixCandidates": [], "splitCandidates": [], "alcoholEvents": [],
+                        "details": _details_with_dates(rs.get("merged_details") or [], t_out)})
+            continue
         if not t_out or not t_in:
             continue
         hours = (t_in - t_out).total_seconds() / 3600.0
-        if hours < LONG_RUN_HOURS:
+        # 出庫日・翌日を超えて3つ目の暦日に入った運行は「対応範囲外」（時間管理Excelの前提違反）
+        over_two_days = t_in.date() > (t_out.date() + timedelta(days=1))
+        if hours < LONG_RUN_HOURS and not over_two_days:
             continue
         crew = _normalize_crew_id(mh.get("乗務員ID"))
         # 表示用: 運行期間内（両端含む）のアルコール検査すべて
@@ -108,13 +125,9 @@ def _detect_long_runs(run_states: List[Dict[str, Any]], input_dir: Path) -> List
                     })
                     break
         out.append({
-            "rowIndex": i,
-            "乗務員ID": mh.get("乗務員ID"),
-            "乗務員名": mh.get("乗務員名"),
-            "車番": vehicle_plate_display(mh.get("車両番号")),
-            "出庫日時": mh.get("出庫日時"),
-            "帰庫日時": mh.get("帰庫日時"),
+            **ident,
             "拘束時間h": round(hours, 1),
+            "エラー種別": "運行期間超過" if over_two_days else "",
             "fixCandidates": fix_candidates,
             "splitCandidates": split_candidates,
             "alcoholEvents": [
