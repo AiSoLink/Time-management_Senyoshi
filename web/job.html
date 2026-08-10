@@ -377,6 +377,7 @@
     }
   }
 
+  var pollFailCount = 0;  /* 一時的な読み取り失敗（共有ドライブの書き込み中など）は黙ってリトライする */
   function poll() {
     fetchJob().then(function (j) {
       try {
@@ -384,6 +385,7 @@
           showLoadingFailed("サーバーからの応答が不正です。");
           return;
         }
+        pollFailCount = 0;
         job = j;
         if (j.status === "queued" || j.status === "running") {
           pollTimer = setTimeout(poll, 1000);
@@ -394,6 +396,11 @@
         showLoadingFailed(String(e));
       }
     }).catch(function (e) {
+      pollFailCount++;
+      if (pollFailCount <= 10) {
+        pollTimer = setTimeout(poll, 2000);
+        return;
+      }
       showLoadingFailed(String(e));
     });
   }

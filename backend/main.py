@@ -709,8 +709,15 @@ def _enrich_driver_rows_with_plate(driver_rows: List[Dict[str, Any]], run_states
 @app.get("/api/jobs/{jobId}")
 def get_job(jobId: str):
     sp = job_state_path(jobId)
+    # アトミック置き換え（os.replace）の瞬間は共有ドライブ上でファイルが一瞬見えないことが
+    # あるため、存在チェックは少しリトライしてから404にする
     if not sp.exists():
-        raise HTTPException(status_code=404, detail="Job not found.")
+        for _ in range(3):
+            time.sleep(0.25)
+            if sp.exists():
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Job not found.")
     state = load_state(sp)
     out: Dict[str, Any] = {**state.__dict__, "artifacts": state.artifacts.__dict__}
     if state.pendingRows is not None:

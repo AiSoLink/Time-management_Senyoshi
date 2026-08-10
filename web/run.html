@@ -295,9 +295,11 @@
       return "（推定残り 約" + Math.ceil(remainSec / 60) + "分）";
     }
 
+    var pollFailCount = 0;  /* 一時的な読み取り失敗（共有ドライブの書き込み中など）は黙ってリトライする */
     function poll() {
       if (!jobId) return;
       apiGet("/api/jobs/" + jobId).then(function (j) {
+        pollFailCount = 0;
         var pct = j.progressPercent != null && j.progressPercent > 0
           ? Math.round(j.progressPercent)
           : (j.totalPdfs ? Math.round((100 * j.processedPdfs) / j.totalPdfs) : 0);
@@ -325,9 +327,19 @@
           );
         }
       }).catch(function (e) {
+        pollFailCount++;
+        if (pollFailCount <= 10) {
+          /* 処理は続いている可能性が高いので監視を継続する */
+          pollTimer = setTimeout(poll, 2000);
+          return;
+        }
         var errMsg = String(e);
         showErr(errMsg);
-        updateGuide("エラー", errMsg, []);
+        updateGuide(
+          "エラー",
+          errMsg,
+          ["ページを再読み込みすると\n監視を再開できます"]
+        );
       });
     }
 
