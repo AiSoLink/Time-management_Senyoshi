@@ -112,11 +112,14 @@ Time-management_Senyoshi/
 │   ├── engine/        ← PDF解析・Excel作成・アルコール突合のロジック
 │   │   ├── pipeline.py      ← メインの処理の流れ
 │   │   └── alcohol_integration.py
-│   ├── companies/     ← 会社ごと・機種ごとの設定（JSON）
+│   ├── companies/     ← 会社ごと・機種ごとの設定（JSON）と乗務員名簿（roster.json）
 │   └── work/          ← ジョブの一時ファイル（アップロード結果など）
 ├── web/               ← 画面のHTML/CSS/JavaScript（静的ファイル）
-│   ├── index.html     ← 最初の画面（会社選択）
-│   ├── job.html       ← 結果画面（紐づけ・手入力・ダウンロード）
+│   ├── index.html     ← 最初の画面（会社選択・会社追加）
+│   ├── device.html    ← 機種選択
+│   ├── run.html       ← ファイルアップロード（前回ファイルで再実行あり）
+│   ├── job.html       ← 結果画面（名簿確認・長時間運行確認・まとめ・横乗り・手入力・DL）
+│   ├── manual.html    ← スタッフ向け操作マニュアル（印刷可・各画面からリンク）
 │   └── ...
 └── frontend/          ← 旧Next.js版（通常は使わない）
 ```
@@ -129,14 +132,24 @@ Time-management_Senyoshi/
 
 ## 📋 画面の流れ（ユーザーがやること）
 
-1. **会社・機種を選ぶ**
-2. **PDF・対面データ・アルコールデータをアップロードして「実行」**
-3. **結果画面で順番に選択・入力**
-   - **3時間未満**の運行を「1本にまとめるか」選ぶ
-   - **3時間以上**空いている運行を「1本にまとめる」グループを選ぶ（任意）
-   - **同乗者**（デジタコがなくアルコールだけの人）を、どの運行に紐づけるか選ぶ（任意）
-   - **出庫・帰庫が取れていない行**があれば、手で日時を入力
-4. **「Excelダウンロード」** で集計結果を取得
+> スタッフ向けの詳しい手順は **`web/manual.html`（操作マニュアル・印刷可）** にまとまっています。
+> 各画面の右側パネルにある「操作マニュアルを開く」からいつでも参照できます。
+
+1. **会社を選ぶ**（会社ごとに乗務員の名簿を自動蓄積。新しい会社は画面から追加可能）
+2. **機種を選ぶ**（みまもり／テレコム）
+3. **日報PDF・対面アルコール・アルキラーをアップロードして「実行」**
+   - 日報は必須。アルコール2種が無い場合は確認画面を挟んで実行可能
+   - 2回目以降は「前回のファイルで再実行」でアップロード不要
+4. **名簿の確認**（2回目以降・該当時のみ）
+   - 名簿にいるのに今回の日報に無い乗務員をお知らせ。「大丈夫」で続行、入れ忘れならPDF追加→再処理
+5. **長時間運行の確認**（該当時のみ）
+   - 出庫〜帰庫が24時間以上の運行を検知（帰庫の押し忘れ対策）。Q&A形式で「帰庫修正」または「2運行に分割」
+   - **2日を超える運行（3暦日）は時間管理Excelの対応範囲外**のため、修正しない限り確定できない
+6. **結果画面で順番に選択・入力**
+   - **ステップ1**: 3時間未満の運行をまとめる／3時間以上空いた運行を紐づける
+   - **ステップ2**: 横乗り（日報が無くアルコールだけの人）をどの運行に紐づけるか選ぶ
+   - **ステップ3**: 紐づかなかった出庫・帰庫の時刻を確定（日報の時刻をチェックで採用、または手入力）
+7. **「Excelダウンロード」** で集計結果を取得（全55列 A〜BC）
 
 ---
 
@@ -285,7 +298,16 @@ Remove-Item -Recurse -Force .\dist, .\build -ErrorAction SilentlyContinue
 
 - **フロント**: 静的 HTML/CSS/JS（`web/`）。バックエンドが `/` で配信し、`/api/*` でAPIを提供。
 - **バックエンド**: FastAPI + Uvicorn。PDF解析は pdfplumber、Excelは openpyxl。
-- **主なAPI**: `POST /api/jobs`（ジョブ作成）、`GET /api/jobs/{jobId}`（状態取得）、`GET /api/jobs/{jobId}/download/excel`（Excel取得）など。
+- **主なAPI**:
+  - `GET/POST /api/companies`（会社一覧・追加）、`GET /api/companies/{company}/devices`
+  - `POST /api/jobs`（ジョブ作成）、`GET /api/jobs/{jobId}`（状態取得）
+  - `POST /api/jobs/{jobId}/rerun`（前回ファイルで再実行）、`POST /api/jobs/{jobId}/add-pdfs`（日報追加→再処理）
+  - `POST /api/jobs/{jobId}/complete-roster-check`（名簿確認）、`complete-long-run-check`（長時間運行の修正・分割）
+  - `complete-merge` / `complete-link-pairs` / `complete-codriver-link` / `complete-manual` / `revert-step`
+  - `GET /api/jobs/{jobId}/download/excel`（Excel取得）
+- **ジョブの状態遷移**: `queued → running → roster_check_required?（名簿）→ long_run_check_required?（長時間運行）→ merge_decision_required → link_decision_required → codriver_link_required → manual_input_required → succeeded`（`?` は該当時のみ）
+- **Excel出力**: 全55列（A〜BC）。列定義は `backend/engine/excel_headers.json`。休憩は「暦日別（出庫日/翌日）」と「時間帯別（昼/22-24/0-5）」の両方に分割して出力し、検算（許容差1分）を `rest_compare.log` に記録。
+- **乗務員名簿**: `backend/companies/{会社}/roster.json` に実行のたび自動蓄積（Git管理外）。
 
 ---
 

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>操作マニュアル - 時間管理システム</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Roboto, sans-serif;
+      margin: 0;
+      background: #f3f5f9;
+      color: #2b3037;
+      line-height: 1.8;
+    }
+    .page {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #fff;
+      padding: 40px 48px;
+    }
+    h1 {
+      font-size: 22px;
+      border-bottom: 3px solid #2563eb;
+      padding-bottom: 10px;
+      margin: 0 0 6px 0;
+    }
+    .sub { color: #6b7482; font-size: 13px; margin-bottom: 28px; }
+    h2 {
+      font-size: 17px;
+      border-left: 4px solid #2563eb;
+      padding-left: 10px;
+      margin: 36px 0 12px 0;
+      page-break-after: avoid;
+    }
+    h3 { font-size: 14px; margin: 20px 0 6px 0; page-break-after: avoid; }
+    p, li { font-size: 13px; }
+    table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 13px; }
+    th, td { border: 1px solid #cfd6e0; padding: 8px 10px; text-align: left; vertical-align: top; }
+    th { background: #f0f4fa; width: 30%; }
+    .flow {
+      background: #f5f9ff;
+      border: 1px solid #dce8f5;
+      border-radius: 8px;
+      padding: 14px 18px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .note {
+      background: #fff8e1;
+      border: 1px solid #ffe0b2;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #7a4f01;
+      margin: 8px 0;
+    }
+    .danger {
+      background: #fdecea;
+      border: 1px solid #ef9a9a;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #b71c1c;
+      margin: 8px 0;
+    }
+    .toolbar {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+    .toolbar button, .toolbar a {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn-print { background: #2563eb; color: #fff; border: none; }
+    .btn-back { background: #fff; color: #3b4350; border: 1px solid #d4dae3; }
+    @media print {
+      body { background: #fff; }
+      .page { padding: 0; max-width: none; }
+      .toolbar { display: none; }
+      h2 { page-break-after: avoid; }
+      table, .flow, .note, .danger { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="toolbar">
+      <button type="button" class="btn-print" onclick="window.print()">このマニュアルを印刷する</button>
+      <a class="btn-back" href="index.html">システムに戻る</a>
+    </div>
+
+    <h1>時間管理システム 操作マニュアル</h1>
+    <div class="sub">日報とアルコール検査のデータから、労務管理用のExcelを作成するシステムです。新人の方への引き継ぎにもこのマニュアルをお使いください。</div>
+
+    <h2>全体の流れ</h2>
+    <div class="flow">
+      前準備（会社選択 → 機種選択 → ファイルアップロード）<br>
+      ↓<br>
+      ステップ1：運行をまとめる（分かれてしまった運行を1つに）<br>
+      ↓<br>
+      ステップ2：横乗りを選ぶ（だれに同乗したかを指定）<br>
+      ↓<br>
+      ステップ3：時刻を手入力（不明な出庫・帰庫時刻を確定）<br>
+      ↓<br>
+      完了：Excelをダウンロード
+    </div>
+    <p>各画面の右側には常に「操作ガイド」と「作業の流れ」が表示されます。いま自分がどこにいるか分からなくなったら、右側の「いまここ」を確認してください。</p>
+
+    <h2>前準備</h2>
+    <h3>1. 会社を選ぶ</h3>
+    <p>最初の画面で処理する会社をクリックします。会社ごとに乗務員の名簿が保存されており、2回目以降は「名簿にいるのに日報が無い人」を自動でお知らせします。新しい会社は画面下の「会社を追加する」から登録できます。</p>
+
+    <h3>2. 機種を選ぶ</h3>
+    <p>使用しているデジタコの機種（みまもり／テレコム）をクリックします。</p>
+
+    <h3>3. ファイルをアップロード</h3>
+    <table>
+      <tr><th>日報（PDF）</th><td>必ず選択します。これが無いと実行できません。</td></tr>
+      <tr><th>対面アルコール</th><td>できるだけ選択してください。</td></tr>
+      <tr><th>アルキラー（遠隔）</th><td>できるだけ選択してください。</td></tr>
+    </table>
+    <div class="note">アルコールのファイルが無くても実行はできますが、確認画面が出ます。無い分の時刻は、あとで手入力または日報の時刻での確定になります。</div>
+    <p>一度アップロードすると「前回のファイルで再実行」ボタンが出るようになり、同じファイルを選び直さずに再実行できます。</p>
+
+    <h3>4. 名簿の確認（出ることがあります）</h3>
+    <p>前回までに登場した乗務員のうち、今回の日報に無い人がいるとこの画面が出ます。</p>
+    <ul>
+      <li>休み・運行なし・退職なら →「大丈夫（今回は運行なし）」で次へ</li>
+      <li>日報の入れ忘れなら → その場でPDFを追加して再処理</li>
+    </ul>
+
+    <h3>5. 長時間運行の確認（出ることがあります）</h3>
+    <p>出庫から帰庫まで24時間以上の運行があると出ます。多くは「帰庫ボタンの押し忘れ」が原因です。質問に答えるだけで直せます。</p>
+    <table>
+      <tr><th>Q1. 切り忘れですか？</th><td>「いいえ」なら本当に長い運行としてそのまま処理します。</td></tr>
+      <tr><th>Q2. 実際は何本？</th><td>1本 → 正しい帰庫時刻を入力／2本 → 1本目の帰庫と2本目の出庫を入力（アルコール検査の時刻が自動で候補に入ります）。画面内の「日報の作業明細」で作業の流れを見ながら判断できます。</td></tr>
+    </table>
+    <div class="danger">赤い【運行期間エラー】（2日を超える運行）が出た場合は、そのまま確定できません。必ず分割か帰庫修正で2日以内に収めてください。判断に迷う場合はシステム担当者へ連絡してください。</div>
+
+    <h2>ステップ1：運行をまとめる</h2>
+    <h3>短い休息（3時間未満）</h3>
+    <p>同じ乗務員で、1本目の帰庫と2本目の出庫が3時間未満の運行はチェックを付けると1つの運行にまとまります。まとめた場合は【実績日】でどの日の運行として扱うか選びます。</p>
+    <h3>長い休息（3時間以上）</h3>
+    <p>「まとめたい運行はありますか？」に答えます。<strong>通常は「いいえ」でOK</strong>です。事故で車両を乗り換えた場合や、長い休憩中にデジタコを切ってしまった場合だけ「はい」を選び、まとめたい運行を2本以上セットに追加します。</p>
+
+    <h2>ステップ2：横乗りを選ぶ</h2>
+    <p>アルコール検査の記録はあるのに日報のデータが無い乗務員の一覧です。別の乗務員の車両に同乗（横乗り）した可能性があります。同乗していた運行があればリストから選び、無ければ空のまま「次へ」で進みます。</p>
+
+    <h2>ステップ3：時刻を手入力</h2>
+    <p>日報とアルコールのデータが紐づかなかった（120分以内に検査が無い）乗務員の一覧です。出庫・帰庫それぞれについて：</p>
+    <ul>
+      <li><strong>✓ 紐づけできています</strong> → 確認不要。そのまま採用されます</li>
+      <li><strong>日報で確認できた時刻を使う</strong> → チェックのままでOK。<strong>青い欄はそのままクリックして直接書き換えもできます</strong>（分だけの修正もOK）</li>
+      <li>どちらも違う → チェックを外して手入力（日付 YYYY/MM/DD、時刻 HH:MM）</li>
+      <li>関係ない行 → チェックを外して空のまま</li>
+    </ul>
+    <p>入力できたら「ダウンロード」を押すとExcelが保存されます。</p>
+
+    <h2>困ったとき（よくある質問）</h2>
+    <table>
+      <tr><th>前の画面に戻りたい</th><td>各画面の「1つ前の画面に戻る」を使ってください。入力した内容は保持されます。</td></tr>
+      <tr><th>画面が真っ白になった</th><td>Ctrl＋Shift＋R（スーパーリロード）を試してください。</td></tr>
+      <tr><th>同じファイルでやり直したい</th><td>アップロード画面の「前回のファイルで再実行」を押すと、ファイルを選び直さずに最初から処理できます。</td></tr>
+      <tr><th>処理が進まない・エラーが出た</th><td>エラーメッセージを控えて、システム担当者へ連絡してください。</td></tr>
+      <tr><th>Excelの中身がおかしい</th><td>正しくない行の乗務員名と日付を控えて、システム担当者へ連絡してください。</td></tr>
+    </table>
+
+    <p style="margin-top:36px;color:#99a3b1;font-size:11px;">時間管理システム 操作マニュアル</p>
+  </div>
+</body>
+</html>

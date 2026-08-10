@@ -231,6 +231,28 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus {
   border-top: 1px dashed #dbe2ec;
 }
 
+/* 操作マニュアル（印刷用）へのリンク */
+.help-link {
+  display: block;
+  margin-top: 24px;
+  padding: 11px 14px;
+  text-align: center;
+  background: #fff;
+  border: 1px solid #d4dae3;
+  border-radius: 10px;
+  color: #1d4ed8;
+  font-weight: 700;
+  font-size: 13px;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 3px rgba(20, 30, 50, 0.06);
+}
+
+.help-link:hover {
+  background: #f5f9ff;
+  border-color: #2563eb;
+}
+
 /* 作業フロー図（右サイドバー） */
 .flow-step {
   display: flex;
