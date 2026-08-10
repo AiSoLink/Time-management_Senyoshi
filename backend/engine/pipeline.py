@@ -929,6 +929,20 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
             _get_rest_compare_logger().error(
                 "BREAK_CHECK_DATE_MISMATCH %s 休憩時間_分割前=%s 休憩時間_出庫日_分割前=%s 休憩時間_翌日_分割前=%s 理由=日付別合計が不一致",
                 _ident, break_total, break_date1, break_date2)
+        # 当日終了運行では翌日側の休憩は必ず0（後段Excel要件 7.1）
+        if out_dt is not None and in_dt is not None and out_dt.date() == in_dt.date() and break_date2 > 0:
+            _get_rest_compare_logger().error(
+                "BREAK_CHECK_SAMEDAY_NEXTDAY %s 休憩時間_翌日_分割前=%s 理由=当日終了運行なのに翌日側休憩が正数",
+                _ident, break_date2)
+        # 各暦日の休憩は、その暦日に存在する出庫〜帰庫時間を超えない（後段Excel要件 7.1）
+        if out_dt is not None and in_dt is not None and in_dt > out_dt:
+            _day2_start = out_dt.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+            _bind_d1 = int((min(in_dt, _day2_start) - out_dt).total_seconds() // 60) if out_dt < _day2_start else 0
+            _bind_d2 = int((in_dt - max(out_dt, _day2_start)).total_seconds() // 60) if in_dt > _day2_start else 0
+            if break_date1 > _bind_d1 + 1 or break_date2 > _bind_d2 + 1:
+                _get_rest_compare_logger().error(
+                    "BREAK_CHECK_DATE_EXCEEDS_BIND %s 出庫日休憩=%s/拘束=%s 翌日休憩=%s/拘束=%s 理由=暦日内の拘束時間を休憩が超過",
+                    _ident, break_date1, _bind_d1, break_date2, _bind_d2)
         if min(break_total, break_day, break_2224, break_0005, break_date1, break_date2) < 0:
             _get_rest_compare_logger().error("BREAK_CHECK_NEGATIVE %s 理由=負数の休憩時間", _ident)
         if break_total > bind_min:
