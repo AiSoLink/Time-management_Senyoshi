@@ -838,7 +838,26 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
             break_0005 += w0005
             # 暦日分割（出庫日側 / 翌日側）。基準日は出庫日
             if out_dt is not None:
-                d1, d2, oor = _split_break_by_date(b["start"], b["end"], out_dt)
+                b_start, b_end = b["start"], b["end"]
+                # 明細の日跨ぎ判定の誤発動チェック:
+                # 休憩が運行の帰庫時刻より後になっている場合は1日ずれている。
+                # 1日戻して運行内（出庫〜帰庫）に収まるならそちらを採用する。
+                if in_dt is not None and b_start > in_dt:
+                    _ss, _se = b_start, b_end
+                    _guard = 0
+                    while _ss > in_dt and _guard < 5:
+                        _ss -= timedelta(days=1)
+                        _se -= timedelta(days=1)
+                        _guard += 1
+                    if _ss >= out_dt - timedelta(hours=2) and _se <= in_dt + timedelta(hours=2):
+                        try:
+                            _get_rest_compare_logger().warning(
+                                "BREAK_DATE_WALK_ADJUST 運行ID=%s 乗務員名=%s 休憩=%s〜%s → %s〜%s へ補正して暦日分割（明細順序による日跨ぎ誤判定の補正）",
+                                header.get("運行ID"), header.get("乗務員名"), b_start, b_end, _ss, _se)
+                        except Exception:
+                            pass
+                        b_start, b_end = _ss, _se
+                d1, d2, oor = _split_break_by_date(b_start, b_end, out_dt)
                 break_date1 += d1
                 break_date2 += d2
                 if oor > 0:
@@ -1577,6 +1596,23 @@ def _merge_runs(rows: List[Dict[str, Any]], run_states: List[Dict[str, Any]], he
             return float(v)
         except (TypeError, ValueError):
             return 0.0
+
+    # 統合前に必ず時系列（出庫の早い順）へ並べ直す。
+    # 出庫日時が未確定（アルコール不一致等で空）の行は、日報の元時刻で順序を判定する。
+    # 順序が乱れると明細の日跨ぎ判定が誤発動し、休憩の暦日分割が翌日にずれるため。
+    def _order_key(pair):
+        r, rs = pair
+        mh = (rs.get("merged_header") or {}) if isinstance(rs, dict) else {}
+        t = (_row_to_dt(r.get("出庫日時"))
+             or _row_to_dt(mh.get("_digitaco_出庫日時"))
+             or _row_to_dt(mh.get("出庫日時"))
+             or _row_to_dt(r.get("帰庫日時"))
+             or _row_to_dt(mh.get("_digitaco_帰庫日時")))
+        return (t is None, t or datetime.max)
+    _pairs = sorted(zip(rows, run_states), key=_order_key)
+    if _pairs:
+        rows = [p[0] for p in _pairs] + list(rows[len(_pairs):])
+        run_states = [p[1] for p in _pairs] + list(run_states[len(_pairs):])
 
     first = rows[0]
     merged_row: Dict[str, Any] = {}

@@ -231,6 +231,38 @@ input[type="text"]:focus, input[type="number"]:focus, select:focus {
   border-top: 1px dashed #dbe2ec;
 }
 
+/* パネル見出し行（操作ガイド＋マニュアルリンク） */
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.panel-head .panel-section-title {
+  margin-bottom: 0;
+}
+
+.help-link-top {
+  display: inline-block;
+  padding: 5px 12px;
+  background: #fff;
+  border: 1px solid #d4dae3;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-weight: 700;
+  font-size: 11px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: all 0.15s ease;
+}
+
+.help-link-top:hover {
+  background: #f5f9ff;
+  border-color: #2563eb;
+}
+
 /* 操作マニュアル（印刷用）へのリンク */
 .help-link {
   display: block;
