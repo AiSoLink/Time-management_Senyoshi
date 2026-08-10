@@ -1585,8 +1585,10 @@
       var lockCss = "background:#eef5ff;color:#1565c0;border-color:#b9d4f0;";
       var outCss = outLock ? lockCss : "";
       var inCss = inLock ? lockCss : "";
-      var roOut = outLock ? " readonly" : "";
-      var roIn = inLock ? " readonly" : "";
+      /* 日報チェック中は直接上書き可能（入力した時点で手入力モードへ自動切替）。
+         アルコールで紐づけ済みの側だけは確定値のため編集不可のまま */
+      var roOut = src.out === "alcohol" ? " readonly" : "";
+      var roIn = src.in === "alcohol" ? " readonly" : "";
       /* 紐づけ済み（＝アルコールで確定）の側は選択肢を出さず「紐づけできています」を表示。
          未確定の側だけ2段構成（日報の段＋アルコールの段）で選択肢を出す */
       function sourceChecks(side, nippoDt, alcoholDt, current) {
@@ -1665,9 +1667,41 @@
         render();
       });
     });
+    /* チェックで採用中の欄に直接入力されたら、表示中の値を引き継いで手入力モードへ自動で切り替える。
+       日付だけ・分だけの部分修正が、全部打ち直さずにできるようにするため。 */
+    function adoptSideAsManual(row, side) {
+      var src = manualTimeSource[row];
+      if (!src || !src[side]) return;
+      if (src[side] === "alcohol") return;  /* 紐づけ済みは固定（編集不可） */
+      var p = side === "out" ? "out" : "in";
+      var dEl = document.querySelector('.manual-' + p + '-date[data-row="' + row + '"]');
+      var hEl = document.querySelector('.manual-' + p + '-h[data-row="' + row + '"]');
+      var mEl = document.querySelector('.manual-' + p + '-m[data-row="' + row + '"]');
+      manualEdits[row] = manualEdits[row] || {};
+      if (side === "out") {
+        manualEdits[row].出庫日 = dEl ? dEl.value : "";
+        manualEdits[row].出庫時 = hEl ? hEl.value : "";
+        manualEdits[row].出庫分 = mEl ? mEl.value : "";
+      } else {
+        manualEdits[row].帰庫日 = dEl ? dEl.value : "";
+        manualEdits[row].帰庫時 = hEl ? hEl.value : "";
+        manualEdits[row].帰庫分 = mEl ? mEl.value : "";
+      }
+      src[side] = null;
+      var cb = document.querySelector('.manual-src[data-row="' + row + '"][data-side="' + side + '"]');
+      if (cb) cb.checked = false;
+      [dEl, hEl, mEl].forEach(function (el) {
+        if (el) {
+          el.style.background = "#fff";
+          el.style.color = "";
+          el.style.borderColor = "#ddd";
+        }
+      });
+    }
     document.querySelectorAll(".manual-out-date").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        adoptSideAsManual(row, "out");
         var norm = (inp.value || "").normalize("NFKC");
         if (inp.value !== norm) inp.value = norm;
         manualEdits[row] = manualEdits[row] || {};
@@ -1680,6 +1714,7 @@
     document.querySelectorAll(".manual-out-h").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        adoptSideAsManual(row, "out");
         var self = inp;
         setTimeout(function () {
           var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
@@ -1696,6 +1731,7 @@
     document.querySelectorAll(".manual-out-m").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        adoptSideAsManual(row, "out");
         var self = inp;
         setTimeout(function () {
           var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
@@ -1712,6 +1748,7 @@
     document.querySelectorAll(".manual-in-date").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        adoptSideAsManual(row, "in");
         var norm = (inp.value || "").normalize("NFKC");
         if (inp.value !== norm) inp.value = norm;
         manualEdits[row] = manualEdits[row] || {};
@@ -1724,6 +1761,7 @@
     document.querySelectorAll(".manual-in-h").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        adoptSideAsManual(row, "in");
         var self = inp;
         setTimeout(function () {
           var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");
@@ -1740,6 +1778,7 @@
     document.querySelectorAll(".manual-in-m").forEach(function (inp) {
       inp.addEventListener("input", function () {
         var row = parseInt(inp.getAttribute("data-row"), 10);
+        adoptSideAsManual(row, "in");
         var self = inp;
         setTimeout(function () {
           var raw = (self.value || "").normalize("NFKC").replace(/\D/g, "");

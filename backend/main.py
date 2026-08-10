@@ -586,10 +586,6 @@ async def create_job(
             raise HTTPException(status_code=400, detail="Preset JSON not found for this device.")
         if not pdfs:
             raise HTTPException(status_code=400, detail="日報のPDFファイルを選択してください。")
-        if not taimen:
-            raise HTTPException(status_code=400, detail="対面アルコールのファイルを選択してください。")
-        if not alcohol:
-            raise HTTPException(status_code=400, detail="アルキラー（遠隔）のファイルを選択してください。")
 
         job_id = time.strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:6]
         inp = job_input_dir(job_id)

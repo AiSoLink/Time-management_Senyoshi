@@ -21,22 +21,31 @@
       <div style="background:#f5f9ff;border:1px solid #dce8f5;border-radius:8px;padding:24px;margin-bottom:24px;">
         <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:20px;margin-bottom:24px;">
           <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
-            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;" id="digitacoLabel">日報（必須）</div>
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;" id="digitacoLabel">日報</div>
             <input type="file" accept="application/pdf" multiple id="pdfs" style="width:100%;"/>
             <span id="pdfCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
           </div>
           <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
-            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">対面アルコール（必須）</div>
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">対面アルコール</div>
             <input type="file" multiple id="taimen" style="width:100%;"/>
             <span id="taimenCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
           </div>
           <div style="background:#white;padding:16px;border-radius:8px;border:1px solid #ddd;">
-            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">アルキラー（遠隔・必須）</div>
+            <div style="font-weight:600;margin-bottom:8px;color:#1a1a1a;font-size:14px;">アルキラー（遠隔）</div>
             <input type="file" multiple id="alcohol" style="width:100%;"/>
             <span id="alcoholCount" style="display:block;margin-top:8px;font-size:12px;color:#999;"></span>
           </div>
         </div>
         <button type="button" id="btnStart" class="btn-primary" style="width:100%;padding:12px;font-size:16px;">実行</button>
+      </div>
+      <!-- 3種類そろっていないときの確認 -->
+      <div id="confirmSection" style="display:none;background:#fff8e1;border:1px solid #ffe0b2;border-radius:10px;padding:20px;margin-bottom:24px;">
+        <div style="font-weight:700;color:#7a4f01;font-size:15px;margin-bottom:8px;">ファイルがそろっていませんが、実行しますか？</div>
+        <div id="confirmMissing" style="color:#7a4f01;font-size:13px;line-height:1.8;margin-bottom:16px;"></div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <button type="button" id="btnConfirmBack" class="btn-secondary" style="flex:1;min-width:160px;">戻ってファイルを選ぶ</button>
+          <button type="button" id="btnConfirmGo" class="btn-primary" style="flex:1;min-width:160px;">このまま実行する</button>
+        </div>
       </div>
     </div>
 
@@ -119,9 +128,9 @@
       document.getElementById("pdfCount").textContent = pdfInput.files.length ? pdfInput.files.length + "件" : "";
       document.getElementById("taimenCount").textContent = taimenInput.files.length ? taimenInput.files.length + "件" : "";
       document.getElementById("alcoholCount").textContent = alcoholInput.files.length ? alcoholInput.files.length + "件" : "";
-      /* 日報・対面アルコール・アルキラーの3種類すべて必須 */
-      document.getElementById("btnStart").disabled =
-        pdfInput.files.length === 0 || taimenInput.files.length === 0 || alcoholInput.files.length === 0;
+      /* 日報だけは必須。アルコール2種が無い場合は実行時に確認を挟む */
+      document.getElementById("btnStart").disabled = pdfInput.files.length === 0;
+      document.getElementById("confirmSection").style.display = "none";
     }
     pdfInput.addEventListener("change", updateCounts);
     taimenInput.addEventListener("change", updateCounts);
@@ -130,13 +139,12 @@
 
     updateGuide(
       "前準備：ファイルを選択",
-      "3種類のファイルを\nすべて選択してください。\n（すべて必須です）",
+      "ファイルを選択して\n「実行」を押してください。",
       [
-        "日報（PDF）",
-        "対面アルコール",
-        "アルキラー（遠隔）",
-        "それぞれ複数ファイル選択可能",
-        "3種類そろうと「実行」が\n押せるようになります"
+        "日報（PDF）を選ぶと\n実行できます",
+        "対面アルコール・アルキラーも\n選択してください",
+        "そろっていない場合は\n確認画面が出ます",
+        "それぞれ複数ファイル選択可能"
       ]
     );
     if (window.renderFlow) renderFlow("prep");
@@ -193,12 +201,7 @@
         });
     });
 
-    document.getElementById("btnStart").addEventListener("click", function () {
-      if (pdfInput.files.length === 0 || taimenInput.files.length === 0 || alcoholInput.files.length === 0) {
-        showErr("日報・対面アルコール・アルキラー（遠隔）の3種類すべてのファイルを選択してください。");
-        return;
-      }
-      showErr("");
+    function startUpload() {
       var fd = new FormData();
       fd.append("company", company);
       fd.append("device", device);
@@ -243,6 +246,40 @@
           document.getElementById("btnStart").disabled = false;
           document.getElementById("btnStart").textContent = "実行";
         });
+    }
+
+    document.getElementById("btnStart").addEventListener("click", function () {
+      if (pdfInput.files.length === 0) return;
+      showErr("");
+      /* 3種類そろっていない場合は確認を挟む */
+      var missing = [];
+      if (taimenInput.files.length === 0) missing.push("対面アルコール");
+      if (alcoholInput.files.length === 0) missing.push("アルキラー（遠隔）");
+      if (missing.length > 0) {
+        document.getElementById("confirmMissing").innerHTML =
+          "次のファイルが選択されていません：<strong>" + missing.join("・") + "</strong><br>"
+          + "アルコールのデータが無い場合、その分の時刻はあとで手入力または日報の時刻での確定になります。";
+        document.getElementById("confirmSection").style.display = "block";
+        document.getElementById("confirmSection").scrollIntoView({ behavior: "smooth", block: "nearest" });
+        updateGuide(
+          "前準備：確認",
+          "ファイルが3種類\nそろっていません。",
+          [
+            "このまま実行してもOKです",
+            "アルコールが無い分は\n手入力または日報の時刻で\n確定することになります",
+            "そろえる場合は「戻って\nファイルを選ぶ」をクリック"
+          ]
+        );
+        return;
+      }
+      startUpload();
+    });
+    document.getElementById("btnConfirmGo").addEventListener("click", function () {
+      document.getElementById("confirmSection").style.display = "none";
+      startUpload();
+    });
+    document.getElementById("btnConfirmBack").addEventListener("click", function () {
+      document.getElementById("confirmSection").style.display = "none";
     });
 
     function poll() {
