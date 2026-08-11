@@ -12,6 +12,13 @@
     <p id="err" class="err" style="display:none;"></p>
     <p style="color:#666;margin-bottom:20px;line-height:1.6;">処理する会社を選択してください。</p>
     <div id="companies" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:16px;"></div>
+    <div id="rosterPanel" style="display:none;margin-top:20px;background:#fff;border:1px solid #d4dae3;border-radius:10px;padding:18px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+        <div id="rosterTitle" style="font-size:14px;font-weight:700;color:#1a1a1a;"></div>
+        <button type="button" id="btnRosterClose" class="btn-secondary" style="padding:4px 14px;font-size:12px;">閉じる</button>
+      </div>
+      <div id="rosterList"></div>
+    </div>
     <div style="margin-top:28px;background:#f6f8fb;border:1px solid #e4eaf3;border-radius:10px;padding:18px;">
       <div style="font-size:13px;font-weight:700;color:#4b5563;margin-bottom:10px;">会社を追加する</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;">
@@ -68,6 +75,7 @@
       "処理する会社を\nクリックしてください。",
       [
         "会社ごとに乗務員の名簿を\n保持しています",
+        "「ドライバー一覧」で登録済みの\n乗務員を確認できます",
         "2回目以降は、名簿にいるのに\n日報が無い乗務員を\nお知らせします"
       ]
     );
@@ -78,22 +86,42 @@
         .then(function (data) {
           companiesEl.innerHTML = "";
           (data.companies || []).forEach(function (name) {
+            var card = document.createElement("div");
+            card.style.border = "1px solid #d4dae3";
+            card.style.background = "#fff";
+            card.style.borderRadius = "10px";
+            card.style.boxShadow = "0 1px 4px rgba(25, 40, 70, 0.06)";
+            card.style.display = "flex";
+            card.style.flexDirection = "column";
+
             var a = document.createElement("a");
             a.textContent = name;
             a.style.display = "block";
-            a.style.padding = "20px";
-            a.style.border = "1px solid #d4dae3";
-            a.style.background = "#fff";
-            a.style.borderRadius = "10px";
+            a.style.padding = "20px 20px 12px";
             a.style.textDecoration = "none";
             a.style.color = "#1d4ed8";
             a.style.fontWeight = "700";
             a.style.fontSize = "16px";
             a.style.textAlign = "center";
             a.style.cursor = "pointer";
-            a.style.boxShadow = "0 1px 4px rgba(25, 40, 70, 0.06)";
             a.href = "device.html?company=" + encodeURIComponent(name);
-            companiesEl.appendChild(a);
+            card.appendChild(a);
+
+            var rosterBtn = document.createElement("button");
+            rosterBtn.type = "button";
+            rosterBtn.textContent = "ドライバー一覧";
+            rosterBtn.style.margin = "0 20px 14px";
+            rosterBtn.style.padding = "5px 10px";
+            rosterBtn.style.fontSize = "12px";
+            rosterBtn.style.color = "#4b5563";
+            rosterBtn.style.background = "#f6f8fb";
+            rosterBtn.style.border = "1px solid #e4eaf3";
+            rosterBtn.style.borderRadius = "6px";
+            rosterBtn.style.cursor = "pointer";
+            rosterBtn.addEventListener("click", function () { showRoster(name); });
+            card.appendChild(rosterBtn);
+
+            companiesEl.appendChild(card);
           });
           if (!(data.companies || []).length) {
             companiesEl.innerHTML = '<p style="color:#666;">会社が登録されていません。下の「会社を追加する」から登録してください。</p>';
@@ -106,6 +134,46 @@
         });
     }
     loadCompanies();
+
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function showRoster(name) {
+      var panel = document.getElementById("rosterPanel");
+      var title = document.getElementById("rosterTitle");
+      var list = document.getElementById("rosterList");
+      title.textContent = name + " のドライバー一覧";
+      list.innerHTML = '<p style="color:#666;margin:0;">読み込み中...</p>';
+      panel.style.display = "block";
+      panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      apiGet("/api/companies/" + encodeURIComponent(name) + "/roster")
+        .then(function (data) {
+          var crew = data.crew || [];
+          if (!crew.length) {
+            list.innerHTML = '<p style="color:#666;margin:0;line-height:1.7;">名簿はまだありません。<br>最初の日報処理が完了すると、登場した乗務員が自動で登録されます。</p>';
+            return;
+          }
+          var html = '<p style="color:#666;margin:0 0 10px;font-size:13px;">全 ' + crew.length + ' 名（過去の日報処理で自動登録）</p>';
+          html += '<div style="max-height:340px;overflow-y:auto;border:1px solid #eee;border-radius:6px;">';
+          html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+          html += '<thead><tr style="background:#f5f5f5;position:sticky;top:0;"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #ddd;width:110px;">乗務員ID</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #ddd;">乗務員名</th></tr></thead><tbody>';
+          crew.forEach(function (c, i) {
+            html += '<tr style="background:' + (i % 2 === 0 ? "#fff" : "#f9f9f9") + ';">'
+              + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;color:#666;">' + esc(c.乗務員ID) + '</td>'
+              + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;">' + esc(c.乗務員名) + '</td></tr>';
+          });
+          html += '</tbody></table></div>';
+          list.innerHTML = html;
+        })
+        .catch(function (e) {
+          list.innerHTML = '<p style="color:#c00;margin:0;">' + esc(String(e)) + '</p>';
+        });
+    }
+
+    document.getElementById("btnRosterClose").addEventListener("click", function () {
+      document.getElementById("rosterPanel").style.display = "none";
+    });
 
     document.getElementById("btnAddCompany").addEventListener("click", function () {
       var input = document.getElementById("newCompanyName");

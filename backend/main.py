@@ -544,6 +544,32 @@ def create_company(payload: dict):
             )
     return {"name": name, "created": True}
 
+@app.get("/api/companies/{company}/roster")
+def company_roster(company: str):
+    """会社の乗務員名簿（過去の日報処理で蓄積されたもの）を返す。"""
+    company = safe_name(company)
+    company_dir = COMPANIES_DIR / company
+    if not company_dir.exists():
+        raise HTTPException(status_code=404, detail="Company not found.")
+    roster_path = company_dir / "roster.json"
+    crew: List[Dict[str, Any]] = []
+    if roster_path.exists():
+        try:
+            data = json.loads(roster_path.read_text(encoding="utf-8"))
+            crew = data.get("乗務員一覧") or []
+        except (OSError, json.JSONDecodeError):
+            crew = []
+
+    def _sort_key(c: Dict[str, Any]):
+        cid = str(c.get("乗務員ID") or "").strip()
+        try:
+            return (0, int(cid))
+        except ValueError:
+            return (1, cid)
+
+    crew = sorted(crew, key=_sort_key)
+    return {"company": company, "crew": crew, "count": len(crew)}
+
 @app.get("/api/companies/{company}/devices")
 def company_devices(company: str):
     company = safe_name(company)
