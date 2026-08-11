@@ -139,7 +139,59 @@
       return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    var rosterCompany = "";
+
+    function rosterAddForm() {
+      return '<div style="margin-top:12px;background:#f6f8fb;border:1px solid #e4eaf3;border-radius:8px;padding:12px;">'
+        + '<div style="font-size:12px;font-weight:700;color:#4b5563;margin-bottom:8px;">乗務員を手動で追加</div>'
+        + '<div style="display:flex;gap:8px;flex-wrap:wrap;">'
+        + '<input type="text" id="rosterAddId" placeholder="乗務員ID" style="width:120px;padding:6px 10px;font-size:13px;border:1px solid #ddd;border-radius:6px;">'
+        + '<input type="text" id="rosterAddName" placeholder="乗務員名" style="flex:1;min-width:160px;padding:6px 10px;font-size:13px;border:1px solid #ddd;border-radius:6px;">'
+        + '<button type="button" id="btnRosterAdd" class="btn-secondary" style="padding:6px 16px;font-size:13px;">追加</button>'
+        + '</div><p id="rosterAddErr" style="color:#c00;font-size:12px;margin:6px 0 0;display:none;"></p></div>';
+    }
+
+    function bindRosterActions() {
+      var addBtn = document.getElementById("btnRosterAdd");
+      if (addBtn) {
+        addBtn.addEventListener("click", function () {
+          var cid = (document.getElementById("rosterAddId").value || "").trim();
+          var cname = (document.getElementById("rosterAddName").value || "").trim();
+          var errEl2 = document.getElementById("rosterAddErr");
+          errEl2.style.display = "none";
+          if (!cid || !cname) {
+            errEl2.textContent = "乗務員IDと乗務員名の両方を入力してください。";
+            errEl2.style.display = "block";
+            return;
+          }
+          addBtn.disabled = true;
+          apiPostJson("/api/companies/" + encodeURIComponent(rosterCompany) + "/roster", { 乗務員ID: cid, 乗務員名: cname })
+            .then(function () { showRoster(rosterCompany); })
+            .catch(function (e) {
+              addBtn.disabled = false;
+              errEl2.textContent = String(e.message || e);
+              errEl2.style.display = "block";
+            });
+        });
+      }
+      document.querySelectorAll(".roster-del").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var cid = btn.getAttribute("data-id");
+          var cname = btn.getAttribute("data-name");
+          if (!window.confirm(cname + "（ID: " + cid + "）を名簿から削除しますか？\n※次回の日報にこの乗務員が登場すると自動で再登録されます")) return;
+          btn.disabled = true;
+          apiPostJson("/api/companies/" + encodeURIComponent(rosterCompany) + "/roster/delete", { 乗務員ID: cid })
+            .then(function () { showRoster(rosterCompany); })
+            .catch(function (e) {
+              btn.disabled = false;
+              window.alert("削除に失敗しました: " + String(e.message || e));
+            });
+        });
+      });
+    }
+
     function showRoster(name) {
+      rosterCompany = name;
       var panel = document.getElementById("rosterPanel");
       var title = document.getElementById("rosterTitle");
       var list = document.getElementById("rosterList");
@@ -150,21 +202,28 @@
       apiGet("/api/companies/" + encodeURIComponent(name) + "/roster")
         .then(function (data) {
           var crew = data.crew || [];
+          var html = "";
           if (!crew.length) {
-            list.innerHTML = '<p style="color:#666;margin:0;line-height:1.7;">名簿はまだありません。<br>最初の日報処理が完了すると、登場した乗務員が自動で登録されます。</p>';
-            return;
+            html += '<p style="color:#666;margin:0;line-height:1.7;">名簿はまだありません。<br>日報処理が完了すると登場した乗務員が自動で登録されます。下から手動で追加もできます。</p>';
+          } else {
+            html += '<p style="color:#666;margin:0 0 10px;font-size:13px;">全 ' + crew.length + ' 名（日報処理で自動登録＋手動追加）</p>';
+            html += '<div style="max-height:340px;overflow-y:auto;border:1px solid #eee;border-radius:6px;">';
+            html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+            html += '<thead><tr style="background:#f5f5f5;position:sticky;top:0;"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #ddd;width:110px;">乗務員ID</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #ddd;">乗務員名</th><th style="width:70px;border-bottom:1px solid #ddd;"></th></tr></thead><tbody>';
+            crew.forEach(function (c, i) {
+              var idEsc = esc(c.乗務員ID);
+              var nameEsc = esc(c.乗務員名);
+              html += '<tr style="background:' + (i % 2 === 0 ? "#fff" : "#f9f9f9") + ';">'
+                + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;color:#666;">' + idEsc + '</td>'
+                + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;">' + nameEsc + '</td>'
+                + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;text-align:right;">'
+                + '<button type="button" class="roster-del" data-id="' + idEsc + '" data-name="' + nameEsc + '" style="padding:2px 10px;font-size:12px;color:#c00;background:#fff;border:1px solid #f0c0c0;border-radius:6px;cursor:pointer;">削除</button></td></tr>';
+            });
+            html += '</tbody></table></div>';
           }
-          var html = '<p style="color:#666;margin:0 0 10px;font-size:13px;">全 ' + crew.length + ' 名（過去の日報処理で自動登録）</p>';
-          html += '<div style="max-height:340px;overflow-y:auto;border:1px solid #eee;border-radius:6px;">';
-          html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
-          html += '<thead><tr style="background:#f5f5f5;position:sticky;top:0;"><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #ddd;width:110px;">乗務員ID</th><th style="padding:8px 12px;text-align:left;border-bottom:1px solid #ddd;">乗務員名</th></tr></thead><tbody>';
-          crew.forEach(function (c, i) {
-            html += '<tr style="background:' + (i % 2 === 0 ? "#fff" : "#f9f9f9") + ';">'
-              + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;color:#666;">' + esc(c.乗務員ID) + '</td>'
-              + '<td style="padding:6px 12px;border-bottom:1px solid #f0f0f0;">' + esc(c.乗務員名) + '</td></tr>';
-          });
-          html += '</tbody></table></div>';
+          html += rosterAddForm();
           list.innerHTML = html;
+          bindRosterActions();
         })
         .catch(function (e) {
           list.innerHTML = '<p style="color:#c00;margin:0;">' + esc(String(e)) + '</p>';

@@ -544,31 +544,82 @@ def create_company(payload: dict):
             )
     return {"name": name, "created": True}
 
-@app.get("/api/companies/{company}/roster")
-def company_roster(company: str):
-    """会社の乗務員名簿（過去の日報処理で蓄積されたもの）を返す。"""
-    company = safe_name(company)
-    company_dir = COMPANIES_DIR / company
+def _roster_sort_key(c: Dict[str, Any]):
+    cid = str(c.get("乗務員ID") or "").strip()
+    try:
+        return (0, int(cid))
+    except ValueError:
+        return (1, cid)
+
+
+def _company_dir_or_404(company: str) -> Path:
+    company_dir = COMPANIES_DIR / safe_name(company)
     if not company_dir.exists():
         raise HTTPException(status_code=404, detail="Company not found.")
+    return company_dir
+
+
+def _load_company_roster(company_dir: Path) -> List[Dict[str, Any]]:
     roster_path = company_dir / "roster.json"
-    crew: List[Dict[str, Any]] = []
-    if roster_path.exists():
-        try:
-            data = json.loads(roster_path.read_text(encoding="utf-8"))
-            crew = data.get("乗務員一覧") or []
-        except (OSError, json.JSONDecodeError):
-            crew = []
+    if not roster_path.exists():
+        return []
+    try:
+        data = json.loads(roster_path.read_text(encoding="utf-8"))
+        return data.get("乗務員一覧") or []
+    except (OSError, json.JSONDecodeError):
+        return []
 
-    def _sort_key(c: Dict[str, Any]):
-        cid = str(c.get("乗務員ID") or "").strip()
-        try:
-            return (0, int(cid))
-        except ValueError:
-            return (1, cid)
 
-    crew = sorted(crew, key=_sort_key)
-    return {"company": company, "crew": crew, "count": len(crew)}
+def _save_company_roster(company_dir: Path, crew: List[Dict[str, Any]]) -> None:
+    crew = sorted(crew, key=lambda m: str(m.get("乗務員ID") or ""))
+    (company_dir / "roster.json").write_text(
+        json.dumps({"乗務員一覧": crew}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+@app.get("/api/companies/{company}/roster")
+def company_roster(company: str):
+    """会社の乗務員名簿（日報処理で自動蓄積＋手動追加分）を返す。"""
+    company_dir = _company_dir_or_404(company)
+    crew = sorted(_load_company_roster(company_dir), key=_roster_sort_key)
+    return {"company": company_dir.name, "crew": crew, "count": len(crew)}
+
+@app.post("/api/companies/{company}/roster")
+def company_roster_add(company: str, payload: dict):
+    """名簿に乗務員を手動追加する。同じIDが既にいれば名前を更新する。"""
+    company_dir = _company_dir_or_404(company)
+    cid = str(payload.get("乗務員ID") or "").strip()
+    cname = str(payload.get("乗務員名") or "").strip()
+    if not cid or not cname:
+        raise HTTPException(status_code=400, detail="乗務員IDと乗務員名の両方を入力してください。")
+    norm = normalize_crew_id(cid)
+    if not norm:
+        raise HTTPException(status_code=400, detail="乗務員IDが不正です。")
+    crew = _load_company_roster(company_dir)
+    for c in crew:
+        if normalize_crew_id(c.get("乗務員ID")) == norm:
+            c["乗務員名"] = cname
+            break
+    else:
+        crew.append({"乗務員ID": cid, "乗務員名": cname})
+    _save_company_roster(company_dir, crew)
+    return {"ok": True, "count": len(crew)}
+
+@app.post("/api/companies/{company}/roster/delete")
+def company_roster_delete(company: str, payload: dict):
+    """名簿から乗務員を手動削除する。"""
+    company_dir = _company_dir_or_404(company)
+    cid = str(payload.get("乗務員ID") or "").strip()
+    norm = normalize_crew_id(cid)
+    if not norm:
+        raise HTTPException(status_code=400, detail="乗務員IDが不正です。")
+    crew = _load_company_roster(company_dir)
+    kept = [c for c in crew if normalize_crew_id(c.get("乗務員ID")) != norm]
+    if len(kept) == len(crew):
+        raise HTTPException(status_code=404, detail="指定された乗務員IDは名簿にありません。")
+    _save_company_roster(company_dir, kept)
+    return {"ok": True, "count": len(kept)}
 
 @app.get("/api/companies/{company}/devices")
 def company_devices(company: str):
