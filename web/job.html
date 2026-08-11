@@ -1932,6 +1932,23 @@
         帰庫日時: toDatetime(m.帰庫日, m.帰庫時, m.帰庫分)
       };
     });
+    /* 出庫・帰庫の片方だけ入力の行は勤務時間を確定できず、Excelに出力されない。入力漏れの可能性が高いので確認する */
+    var halfRows = [];
+    entries.forEach(function (e, i) {
+      var hasOut = !!(e.出庫日時 && e.出庫日時.trim());
+      var hasIn = !!(e.帰庫日時 && e.帰庫日時.trim());
+      if (hasOut !== hasIn) halfRows.push(pendingRows[i]);
+    });
+    if (halfRows.length > 0) {
+      var names = halfRows.map(function (r) { return (r.乗務員名 || "—") + "（" + (r.運行日 || "") + "）"; }).join("、");
+      var okHalf = window.confirm(
+        "出庫・帰庫の片方だけ入力されている行が " + halfRows.length + " 行あります。\n" +
+        names + "\n\n" +
+        "片方だけの行は勤務時間を確定できないため、Excelには出力されません。\n" +
+        "このまま実行しますか？\n（入力し直す場合は「キャンセル」）"
+      );
+      if (!okHalf) return;
+    }
     setErr("");
     submitting = true;
     render();

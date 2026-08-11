@@ -697,8 +697,15 @@ def _compute_metrics(header: Dict[str, Any], detail_rows: List[Dict[str, Any]], 
         return (1, item, r.get("arrival") or "99:99", r.get("depart") or "99:99")
 
     detail_rows_sorted = sorted(detail_rows, key=_detail_sort_key)
+    # 明細の日付ウォークの起点は日報（デジタコ）の出庫時刻を使う。
+    # 出庫日時がアルコール検査時刻で上書きされていて明細先頭の時刻より後の場合、
+    # 「時刻が戻った＝日跨ぎ」と誤判定して明細全体が1日ずれるため。
+    walk_anchor = out_dt
+    _digi_out = _row_to_dt(header.get("_digitaco_出庫日時"))
+    if _digi_out is not None:
+        walk_anchor = _digi_out
     try:
-        seq = _build_datetime_sequence(out_dt, detail_rows_sorted)
+        seq = _build_datetime_sequence(walk_anchor, detail_rows_sorted)
     except ValueError as e:
         rid = str(header.get("運行ID") or ctx.get("report_id") or "").strip()
         pdf = str(ctx.get("pdf_filename") or "").strip()

@@ -1522,12 +1522,43 @@ def _do_merge_and_excel(
         save_state(sp, state)
         return {"ok": True, "message": "出庫・帰庫が未取得の行があるため、手入力をお願いします。"}
     final_rows = new_rows + _build_codriver_rows(new_rows, codriver_links)
+    # 出庫・帰庫のどちらかが無い行は勤務時間を確定できず後段Excelマクロが停止するため、
+    # Excel には出力せず excluded_runs.json に記録して件数を通知する
+    excluded = [r for r in final_rows if not r.get("出庫日時") or not r.get("帰庫日時")]
+    if excluded:
+        final_rows = [r for r in final_rows if r.get("出庫日時") and r.get("帰庫日時")]
+        try:
+            (out_dir / "excluded_runs.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "運行ID": r.get("運行ID"),
+                            "運行日": r.get("運行日"),
+                            "乗務員ID": r.get("乗務員ID"),
+                            "乗務員名": r.get("乗務員名"),
+                            "車両番号": r.get("車両番号"),
+                            "出庫日時": r.get("出庫日時") or "",
+                            "帰庫日時": r.get("帰庫日時") or "",
+                            "reason": "出庫・帰庫が未入力のため出力対象外",
+                        }
+                        for r in excluded
+                    ],
+                    ensure_ascii=False, indent=2, default=str,
+                ),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
     write_excel(headers, final_rows, out_dir / "output.xlsx")
     state.status = "succeeded"
     state.pendingRows = None
     state.artifacts = Artifacts(excel=True, log=True, skipped=True)
     save_state(sp, state)
-    return {"ok": True, "status": "succeeded", "message": "Excel を出力しました。"}
+    msg = "Excel を出力しました。"
+    if excluded:
+        ids = "、".join(str(r.get("運行ID") or "（不明）") for r in excluded)
+        msg += f"（出庫・帰庫が未入力の{len(excluded)}行は出力対象外: 運行ID {ids}）"
+    return {"ok": True, "status": "succeeded", "message": msg}
 
 
 def _build_codriver_rows(base_rows: List[Dict[str, Any]], codriver_links: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
