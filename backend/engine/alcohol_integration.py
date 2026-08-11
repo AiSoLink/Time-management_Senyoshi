@@ -397,6 +397,21 @@ def integrate_alcohol(
         return (str(uid) if uid is not None else "", t or datetime.max)
 
     events = [e for e in events if _to_datetime(e[2]) is not None]
+
+    # 重複除去: アルキラーNEXの日別シートは日をまたぐ運行の記録を
+    # 前日・当日の両方のシートに出力するため、同一の検査が2回読み込まれる。
+    # 乗務員ID（正規化）・日時・種別が完全一致するイベントは1件にまとめる。
+    seen: set = set()
+    deduped: List[AlcoholEvent] = []
+    for e in events:
+        uid, _name, dt, kind = e
+        key = (_normalize_crew_id(uid), _to_datetime(dt), kind)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(e)
+    events = deduped
+
     events.sort(key=sort_key)
     return events
 
