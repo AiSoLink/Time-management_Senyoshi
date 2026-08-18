@@ -16,6 +16,9 @@ build/
 # Backend: ジョブ実行で生成される作業ディレクトリ
 backend/work/
 
+# Backend: 日報処理で自動蓄積される乗務員名簿（ランタイムデータ）
+backend/companies/*/roster.json
+
 # Node / Next.js
 frontend/node_modules/
 frontend/.next/
